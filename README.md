@@ -86,8 +86,8 @@ base_url = "https://relay.example.com"
 default_model = "claude-sonnet-4-20250514"
 api_format = "openai"
 max_tokens = 16384                     # 单次最大输出（可选）
-thinking_budget = 10000                # 思考 token 预算（可选）
-context_window = 200000                # 上下文窗口（可选）
+thinking_budget = 32000                # 思考 token 预算（可选）
+context_window = 1000000               # 上下文窗口（可选，主流模型已 1M）
 reasoning_effort = "medium"            # 推理强度 low/medium/high（可选）
 temperature = 0.7                      # 创造性 0~1（可选）
 ```
@@ -111,7 +111,7 @@ name = "pro"
 api_key = "sk-yyy"
 base_url = "https://pro.example.com"
 default_model = "claude-sonnet-4-20250514"
-thinking_budget = 20000
+thinking_budget = 50000
 reasoning_effort = "high"
 
 # 本地 Ollama（免费、离线）
@@ -132,8 +132,8 @@ default_model = "llama3"
 | `model` | 默认模型 | `"gpt-4o"` |
 | `max_tokens` | 单次最大输出 | `16384` |
 | `temperature` | 创造性 0~1 | `0.7` |
-| `thinking_budget` | 思考 token 上限 | `10000` |
-| `context_window` | 上下文窗口 | `200000` |
+| `thinking_budget` | 思考 token 上限 | `32000` |
+| `context_window` | 上下文窗口 | `1000000`（主流模型已 1M） |
 | `reasoning_effort` | 推理强度 | `"low"` / `"medium"` / `"high"` |
 
 ### 配置优先级

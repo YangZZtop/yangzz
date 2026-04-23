@@ -52,7 +52,14 @@ jobs:
       - name: Rename binary
         shell: bash
         run: |
-          mv target/${{ matrix.target }}/release/${{ matrix.binary }} yangzz-${{ matrix.target }}${{ matrix.target == 'x86_64-pc-windows-msvc' && '.exe' || '' }}
+          SRC="target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          if [[ "${{ matrix.binary }}" == *.exe ]]; then
+            DEST="yangzz-${{ matrix.target }}.exe"
+          else
+            DEST="yangzz-${{ matrix.target }}"
+          fi
+          echo "Renaming $SRC → $DEST ($(stat -c%s "$SRC" 2>/dev/null || stat -f%z "$SRC") bytes)"
+          mv "$SRC" "$DEST"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

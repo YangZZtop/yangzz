@@ -1,0 +1,29 @@
+[package]
+name = "yangzz"
+description = "AI coding assistant CLI - any model, one variable, ready to go"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "yangzz"
+path = "src/main.rs"
+
+[dependencies]
+yangzz-core = { path = "../yangzz-core" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+crossterm = { workspace = true }
+termimad = { workspace = true }
+indicatif = { workspace = true }
+dialoguer = { workspace = true }
+dirs = { workspace = true }
+chrono = { workspace = true }
+rustyline = { workspace = true }
+ratatui = { workspace = true }
+unicode-width = "0.2"

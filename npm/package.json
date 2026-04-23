@@ -1,0 +1,27 @@
+{
+  "name": "yangzz",
+  "version": "0.1.0",
+  "description": "AI coding assistant — any model, one variable, ready to go",
+  "bin": {
+    "yangzz": "bin/yangzz"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "keywords": [
+    "ai",
+    "coding-assistant",
+    "cli",
+    "llm",
+    "anthropic",
+    "openai",
+    "rust"
+  ],
+  "author": "yangzz contributors",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/YangZZtop/yangzz.git"
+  },
+  "homepage": "https://github.com/YangZZtop/yangzz"
+}

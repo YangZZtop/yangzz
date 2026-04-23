@@ -182,8 +182,25 @@ pub async fn run_agentic_loop(
             response.model, response.usage.input_tokens, response.usage.output_tokens
         ));
 
-        // If no tool calls, we're done
+        // If no tool calls, we're done — but check for premature completion claims
         if response.stop_reason != StopReason::ToolUse {
+            // Completion guard: detect "I'm done" claims without evidence of actual work
+            let assistant_text = response.message.content.iter()
+                .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
+                .collect::<Vec<_>>().join(" ");
+
+            if turn > 0 && completion_guard_triggered(&assistant_text, messages) {
+                renderer.render_info("⚠ Completion claim detected without file changes. Asking model to verify...");
+                // Inject a nudge to actually do the work
+                messages.push(Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::Text {
+                        text: "[SYSTEM: You claimed the task is complete, but no file modifications were detected in this session. Please either (1) actually perform the changes using tools, or (2) explain specifically why no changes are needed.]".to_string(),
+                    }],
+                });
+                continue; // re-enter the loop
+            }
+
             // Hermes: analyze interaction to learn preferences
             let cwd = std::env::current_dir().unwrap_or_default();
             let user_text = messages.iter().rev()
@@ -191,9 +208,6 @@ pub async fn run_agentic_loop(
                 .and_then(|m| m.content.first())
                 .and_then(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
                 .unwrap_or("");
-            let assistant_text = response.message.content.iter()
-                .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
-                .collect::<Vec<_>>().join(" ");
             crate::memory::hermes_analyze(user_text, &assistant_text, &cwd);
 
             return Ok(total_usage);
@@ -366,4 +380,52 @@ pub fn repair_json(raw: &str) -> Option<serde_json::Value> {
     }
 
     serde_json::from_str::<serde_json::Value>(&s).ok()
+}
+
+// ── Completion Guard ──
+// Detects when the AI claims "done" but hasn't actually modified any files.
+// Only triggers once per loop (via the `turn > 0` check in the caller).
+
+static COMPLETION_GUARD_FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn completion_guard_triggered(assistant_text: &str, messages: &[Message]) -> bool {
+    // Only fire once per session turn
+    if COMPLETION_GUARD_FIRED.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+
+    let lower = assistant_text.to_lowercase();
+
+    // Check if the assistant claims completion
+    let completion_phrases = [
+        "任务已完成", "任务已全部完成", "全部完成", "已经完成", "所有修改已完成",
+        "已全部搞定", "大功告成", "圆满完成", "工作已完成", "实施完成",
+        "all done", "task complete", "implementation complete", "all set",
+        "fully complete", "mission accomplished", "changes are done",
+        "i've completed", "i have completed", "everything is done",
+    ];
+    let claims_done = completion_phrases.iter().any(|p| lower.contains(p));
+    if !claims_done {
+        return false;
+    }
+
+    // Check if any file_write/file_edit/multi_edit tool was actually used
+    let write_tools = ["file_edit", "file_write", "multi_edit", "file_append", "parallel_edit"];
+    let has_file_change = messages.iter().any(|m| {
+        m.content.iter().any(|b| {
+            if let ContentBlock::ToolUse { name, .. } = b {
+                write_tools.contains(&name.as_str())
+            } else {
+                false
+            }
+        })
+    });
+
+    if has_file_change {
+        return false; // legit completion
+    }
+
+    // No file changes but claims done → suspicious
+    COMPLETION_GUARD_FIRED.store(true, std::sync::atomic::Ordering::Relaxed);
+    true
 }

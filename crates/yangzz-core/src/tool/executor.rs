@@ -103,13 +103,33 @@ impl ToolExecutor {
         // 5. Pre-tool hook
         hooks::run_tool_hooks(&self.hooks, HookEvent::PreTool, name, input, &self.ctx.cwd).await;
 
-        // 6. Execute
+        // 6. Execute (with 1 retry on failure)
         info!("Executing tool: {name}");
         let output = match tool.execute(input, &self.ctx).await {
-            Ok(output) => output,
+            Ok(output) => {
+                if output.is_error && Self::is_retryable(&output.content) {
+                    info!("Retrying tool {name} (transient failure)...");
+                    match tool.execute(input, &self.ctx).await {
+                        Ok(retry_output) => retry_output,
+                        Err(e) => {
+                            warn!("Tool {name} retry also failed: {e}");
+                            output // return original error
+                        }
+                    }
+                } else {
+                    output
+                }
+            }
             Err(e) => {
-                warn!("Tool {name} failed: {e}");
-                ToolOutput::error(format!("Tool execution failed: {e}"))
+                // Hard error — retry once
+                warn!("Tool {name} failed: {e}, retrying...");
+                match tool.execute(input, &self.ctx).await {
+                    Ok(output) => output,
+                    Err(e2) => {
+                        warn!("Tool {name} retry failed: {e2}");
+                        ToolOutput::error(format!("Tool execution failed: {e2}"))
+                    }
+                }
             }
         };
 
@@ -147,6 +167,24 @@ impl ToolExecutor {
 
     pub fn tool_definitions(&self) -> Vec<crate::provider::ToolDefinition> {
         self.registry.tool_definitions()
+    }
+
+    /// Check if an error is transient and worth retrying
+    fn is_retryable(error_msg: &str) -> bool {
+        let lower = error_msg.to_lowercase();
+        let patterns = [
+            "timed out",
+            "timeout",
+            "connection refused",
+            "connection reset",
+            "broken pipe",
+            "resource temporarily unavailable",
+            "no such process",
+            "interrupted",
+            "econnreset",
+            "epipe",
+        ];
+        patterns.iter().any(|p| lower.contains(p))
     }
 }
 

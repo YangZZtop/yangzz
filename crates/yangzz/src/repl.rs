@@ -545,6 +545,16 @@ pub async fn run(
                 stats.add_usage(usage.input_tokens, usage.output_tokens);
                 status::render_turn_info(elapsed);
                 status::render_status_bar(&stats);
+
+                // Auto memory capture: scan the last exchange for memory-worthy signals
+                let assistant_text = messages.iter().rev().find_map(|m| {
+                    m.content.iter().find_map(|b| {
+                        if let yangzz_core::message::ContentBlock::Text { text } = b {
+                            Some(text.clone())
+                        } else { None }
+                    })
+                }).unwrap_or_default();
+                memory::auto_capture(input, &assistant_text, &cwd);
             }
             Err(e) => {
                 renderer.stop_spinner();

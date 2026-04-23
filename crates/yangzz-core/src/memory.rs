@@ -203,6 +203,135 @@ pub fn hermes_analyze(user_input: &str, assistant_output: &str, cwd: &Path) {
     }
 }
 
+// ── Auto Memory Capture ──
+// Rule-based extraction from conversation — zero token cost.
+// Captures: preferences, lessons (scars), facts, success patterns.
+
+/// Entry kind for structured memory
+#[derive(Debug, Clone)]
+pub enum MemoryKind {
+    Preference,
+    Scar,      // lesson / bug / pitfall
+    Fact,
+    Pattern,   // success pattern
+}
+
+impl MemoryKind {
+    pub fn tag(&self) -> &'static str {
+        match self {
+            MemoryKind::Preference => "pref",
+            MemoryKind::Scar => "scar",
+            MemoryKind::Fact => "fact",
+            MemoryKind::Pattern => "ok",
+        }
+    }
+}
+
+struct CaptureRule {
+    kind: MemoryKind,
+    role: &'static str, // "user", "assistant", "both"
+    patterns: &'static [&'static str],
+}
+
+const CAPTURE_RULES: &[CaptureRule] = &[
+    // Preferences — user turn
+    CaptureRule {
+        kind: MemoryKind::Preference,
+        role: "user",
+        patterns: &[
+            "记住", "以后", "不要再", "别再", "我喜欢", "我不喜欢",
+            "我习惯", "我偏好", "我一般", "请一直", "每次都",
+            "remember", "always", "never", "i prefer", "i like", "i don't like",
+        ],
+    },
+    // Scars — assistant turn (bugs, errors, lessons)
+    CaptureRule {
+        kind: MemoryKind::Scar,
+        role: "assistant",
+        patterns: &[
+            "出错了", "报错", "失败", "回滚", "bug", "踩坑",
+            "错误原因", "root cause", "stack trace", "修复了",
+            "the issue was", "the bug was", "fixed by",
+        ],
+    },
+    // Facts — both turns
+    CaptureRule {
+        kind: MemoryKind::Fact,
+        role: "both",
+        patterns: &[
+            "项目使用", "依赖", "版本", "端口", "环境变量",
+            "api key", "registry", "数据库", "architecture",
+            "tech stack", "framework",
+        ],
+    },
+    // Success patterns — assistant turn
+    CaptureRule {
+        kind: MemoryKind::Pattern,
+        role: "assistant",
+        patterns: &[
+            "发版成功", "部署成功", "测试通过", "全部通过",
+            "publish success", "tests pass", "all checks passed",
+            "deploy success", "✅", "✔",
+        ],
+    },
+];
+
+/// Scan a (user_input, assistant_output) pair for memory-worthy signals.
+/// Writes captured entries to MEMORY.md with kind tags.
+pub fn auto_capture(user_input: &str, assistant_output: &str, cwd: &Path) {
+    let u_lower = user_input.to_lowercase();
+    let a_lower = assistant_output.to_lowercase();
+
+    for rule in CAPTURE_RULES {
+        let text = match rule.role {
+            "user" => &u_lower,
+            "assistant" => &a_lower,
+            _ => &format!("{} {}", u_lower, a_lower),
+        };
+
+        for pattern in rule.patterns {
+            if text.contains(pattern) {
+                // Extract a snippet around the pattern (max 120 chars)
+                let source = match rule.role {
+                    "user" => user_input,
+                    "assistant" => assistant_output,
+                    _ => if u_lower.contains(pattern) { user_input } else { assistant_output },
+                };
+
+                if let Some(snippet) = extract_snippet(source, pattern, 120) {
+                    let entry = format!("[{}] {}", rule.kind.tag(), snippet);
+                    let _ = append_memory(cwd, &entry);
+                }
+                break; // one match per rule is enough
+            }
+        }
+    }
+}
+
+/// Extract a meaningful snippet around a pattern match
+fn extract_snippet(text: &str, pattern: &str, max_len: usize) -> Option<String> {
+    let lower = text.to_lowercase();
+    let pos = lower.find(pattern)?;
+
+    // Take the sentence containing the pattern
+    let start = text[..pos].rfind(|c: char| c == '。' || c == '.' || c == '\n')
+        .map(|p| p + 1)
+        .unwrap_or(pos.saturating_sub(40));
+    let end = text[pos..].find(|c: char| c == '。' || c == '.' || c == '\n')
+        .map(|p| pos + p + 1)
+        .unwrap_or((pos + 80).min(text.len()));
+
+    let snippet = text[start..end].trim();
+    if snippet.is_empty() || snippet.len() < 5 {
+        return None;
+    }
+    if snippet.len() > max_len {
+        Some(format!("{}..", &snippet[..max_len]))
+    } else {
+        Some(snippet.to_string())
+    }
+}
+
 /// Detect frustration patterns and return strategy hint
 pub fn detect_frustration(user_input: &str) -> Option<&'static str> {
     let lower = user_input.to_lowercase();

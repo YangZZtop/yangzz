@@ -42,6 +42,7 @@ cargo install --path crates/yangzz
 
 - **Mac**: `~/Library/Application Support/yangzz/config.toml`
 - **Linux**: `~/.config/yangzz/config.toml`
+- **Windows**: `%APPDATA%\yangzz\config.toml`
 
 ```toml
 provider = "my-relay"
@@ -61,6 +62,7 @@ api_format = "openai"                  # 绝大多数中转都是 openai 格式
 yangzz                                 # 交互模式
 yangzz "fix the bug in src/main.rs"    # 单次执行
 yangzz --guide                         # 查看完整指南
+yangzz --doctor                        # 健康检查（排查配置问题）
 ```
 
 > 💡 **首次运行没有配置？** yangzz 会自动显示配置向导，手把手教你。
@@ -191,7 +193,34 @@ CLI 参数 > YANGZZ_* 环境变量 > 项目 .yangzz.toml > 全局 config.toml
 
 下次对话自动加载，**越用越懂你**。
 
-### 📊 4 层记忆降级
+### � 自动记忆捕获
+
+对话中自动识别并记录（零 token 消耗，纯规则匹配）：
+- **偏好**：用户说"记住"、"以后"、"不要再"、"我喜欢" → 自动写入
+- **教训**：AI 回复含"报错"、"踩坑"、"bug"、"root cause" → 自动记录
+- **事实**：对话中出现"项目使用"、"版本"、"端口"、"数据库" → 自动捕获
+- **成功**：出现"测试通过"、"部署成功"、"发版成功" → 自动记录
+
+### 🛡 完成度检查
+
+防止 AI 虚报"完成了"：
+- 自动检测助手是否声称任务完成
+- 校验本轮是否真的执行了文件修改
+- 如果没有实际改动却说完成，自动追问
+
+### 🔄 工具失败重试
+
+临时性错误（超时、连接重置等）自动重试一次，无需人工干预。
+
+### 🩺 --doctor 健康检查
+
+```bash
+yangzz --doctor
+```
+
+自动检查：配置文件、Provider、API Key、工作目录、Rust 工具链等，一目了然排查问题。
+
+### �📊 4 层记忆降级
 
 | 层级 | 上下文使用率 | 策略 |
 |------|:----------:|------|
@@ -367,6 +396,29 @@ cargo run --package yangzz
 
 ---
 
-## 📄 License
+## � 致谢
+
+yangzz 的设计和实现参考了以下优秀的开源项目和社区成果：
+
+| 项目 | 启发 |
+|------|------|
+| [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | REPL 交互范式、工具管道、⎿ 视觉语言 |
+| [Codex CLI](https://github.com/openai/codex) (OpenAI) | Agentic Loop 设计、沙箱隔离 |
+| [LegnaCode CLI](https://github.com/LegnaCode/cli) | 多 Provider 抽象、配置迁移思路 |
+| [nocode](https://github.com/nicepkg/nocode) | 中文原生 UI、金色主题灵感 |
+| [oh-my-claudecode](https://github.com/anthropics/oh-my-claudecode) | Hook 系统、Skill 加载机制 |
+| [Meta Kim](https://github.com/user/Meta_Kim) | 治理守护线、Orchestrator 模式、Meta Agent 架构 |
+| [code-yangzz](https://github.com/YangZZtop/code-yangzz) | 前身项目 — 记忆系统、Observatory、编排思路的原型 |
+| [Claude Code x OpenClaw Guide](https://github.com/user/Claude-Code-x-OpenClaw-Guide-Zh) | 中文社区实践参考 |
+| [darwin-skill](https://github.com/user/darwin-skill) | Skill 系统设计灵感 |
+| [learn-coding-agent](https://github.com/user/learn-coding-agent) | Agent Loop 学习参考 |
+| [huashu-design](https://github.com/user/huashu-design) | UI/UX 设计参考 |
+| [design.md](https://github.com/user/design.md) | 设计规范参考 |
+
+感谢所有参考项目的作者和贡献者。开源社区让我们站在巨人的肩膀上。
+
+---
+
+## �� License
 
 MIT © [yangzz contributors](https://github.com/YangZZtop/yangzz)

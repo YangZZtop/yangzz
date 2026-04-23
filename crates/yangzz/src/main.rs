@@ -46,6 +46,10 @@ struct Cli {
     /// Show quick-start guide
     #[arg(long)]
     guide: bool,
+
+    /// Run health check (config, provider, tools)
+    #[arg(long)]
+    doctor: bool,
 }
 
 #[tokio::main]
@@ -80,6 +84,12 @@ async fn main() -> anyhow::Result<()> {
     // --setup flag: always run wizard
     if cli.setup {
         run_setup_wizard();
+        return Ok(());
+    }
+
+    // --doctor flag: health check
+    if cli.doctor {
+        run_doctor();
         return Ok(());
     }
 
@@ -191,6 +201,9 @@ pub fn print_guide() {
     println!("  {BOLD_GOLD}三、自动运行的功能（你不需要做任何事）{RESET}");
     println!();
     println!("    • {BOLD}Hermes 自进化{RESET}     — 自动学习你的偏好，写入 MEMORY.md");
+    println!("    • {BOLD}自动记忆捕获{RESET}      — 偏好/教训/事实/成功模式自动提取");
+    println!("    • {BOLD}完成度检查{RESET}        — 防止 AI 虚报完成，自动追问");
+    println!("    • {BOLD}工具失败重试{RESET}      — 超时/连接错误自动重试一次");
     println!("    • {BOLD}项目技能检测{RESET}      — 首轮对话自动识别语言/框架/包管理器");
     println!("    • {BOLD}4层记忆降级{RESET}       — context 快满时自动切换 L0→L1→L2→L3");
     println!("    • {BOLD}危险命令拦截{RESET}      — rm -rf / DROP TABLE 等 27 种模式");
@@ -290,5 +303,142 @@ fn run_setup_wizard() {
     println!("    {DIM}• 可以写多个 [[providers]]，对话中 /model 切换{RESET}");
     println!("    {DIM}• 项目级配置: 项目根目录 .yangzz.toml 覆盖全局{RESET}");
     println!("    {DIM}• 完整指南: yangzz --guide{RESET}");
+    println!();
+}
+
+// ── Health Check (yangzz --doctor) ──
+
+fn run_doctor() {
+    println!();
+    println!("  {BOLD}yangzz --doctor{RESET}  Health Check");
+    println!("  ══════════════════════════");
+    println!();
+
+    let mut passed = 0u32;
+    let mut warned = 0u32;
+    let mut failed = 0u32;
+
+    // 1. Config file
+    let settings = Settings::load(CliOverrides::default());
+    let config_path = if cfg!(target_os = "macos") {
+        dirs::data_dir().map(|d| d.join("yangzz").join("config.toml"))
+    } else if cfg!(target_os = "windows") {
+        dirs::config_dir().map(|d| d.join("yangzz").join("config.toml"))
+    } else {
+        dirs::config_dir().map(|d| d.join("yangzz").join("config.toml"))
+    };
+
+    if let Some(ref path) = config_path {
+        if path.exists() {
+            println!("  {GREEN}✓{RESET} Config file: {}", path.display());
+            passed += 1;
+        } else {
+            // Check project-local
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let local = cwd.join(".yangzz.toml");
+            if local.exists() {
+                println!("  {GREEN}✓{RESET} Config file: {} (project-local)", local.display());
+                passed += 1;
+            } else {
+                println!("  {RED}✖{RESET} Config file not found: {}", path.display());
+                println!("    {DIM}Run: yangzz --setup{RESET}");
+                failed += 1;
+            }
+        }
+    } else {
+        println!("  {YELLOW}⚠{RESET} Cannot determine config directory");
+        warned += 1;
+    }
+
+    // 2. Provider
+    if settings.provider.is_some() {
+        match config::resolve_provider(&settings) {
+            Ok(p) => {
+                println!("  {GREEN}✓{RESET} Provider: {} ({})", p.name(), settings.resolved_model());
+                passed += 1;
+            }
+            Err(e) => {
+                println!("  {RED}✖{RESET} Provider resolution failed: {e}");
+                failed += 1;
+            }
+        }
+    } else {
+        println!("  {RED}✖{RESET} No provider configured");
+        println!("    {DIM}Add 'provider = \"...\"' to config.toml{RESET}");
+        failed += 1;
+    }
+
+    // 3. API Key
+    if settings.api_key.is_some() || !settings.providers.is_empty() {
+        let has_key = settings.api_key.is_some()
+            || settings.providers.iter().any(|p| !p.api_key.is_empty());
+        if has_key {
+            println!("  {GREEN}✓{RESET} API key configured");
+            passed += 1;
+        } else {
+            println!("  {RED}✖{RESET} No API key found");
+            failed += 1;
+        }
+    } else {
+        // Check env vars
+        let env_keys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"];
+        let has_env = env_keys.iter().any(|k| std::env::var(k).is_ok());
+        if has_env {
+            println!("  {GREEN}✓{RESET} API key (from environment variable)");
+            passed += 1;
+        } else {
+            println!("  {RED}✖{RESET} No API key found (config or env)");
+            failed += 1;
+        }
+    }
+
+    // 4. Extra providers
+    let provider_count = settings.providers.len();
+    if provider_count > 0 {
+        println!("  {GREEN}✓{RESET} Extra providers: {provider_count} configured");
+        for ep in &settings.providers {
+            let model = ep.default_model.as_deref().unwrap_or("(default)");
+            println!("    {DIM}• {} → {} [{}]{RESET}", ep.name, ep.base_url, model);
+        }
+        passed += 1;
+    } else {
+        println!("  {DIM}─{RESET} No extra [[providers]] (optional)");
+    }
+
+    // 5. Rust toolchain
+    let has_cargo = std::process::Command::new("cargo").arg("--version").output().is_ok();
+    if has_cargo {
+        println!("  {GREEN}✓{RESET} Rust toolchain available");
+        passed += 1;
+    } else {
+        println!("  {DIM}─{RESET} Rust toolchain not found (optional, for cargo install)");
+    }
+
+    // 6. Working directory
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let has_git = cwd.join(".git").exists();
+    let has_memory = cwd.join("MEMORY.md").exists();
+    println!("  {DIM}─{RESET} Working dir: {}", cwd.display());
+    if has_git { println!("    {GREEN}✓{RESET} Git repo detected"); passed += 1; }
+    if has_memory { println!("    {GREEN}✓{RESET} MEMORY.md found"); passed += 1; }
+
+    // 7. Shell (Windows check)
+    if cfg!(target_os = "windows") {
+        println!("  {GREEN}✓{RESET} Platform: Windows (cmd.exe/PowerShell)");
+        passed += 1;
+    } else {
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "unknown".into());
+        println!("  {GREEN}✓{RESET} Shell: {shell}");
+        passed += 1;
+    }
+
+    // Summary
+    println!();
+    if failed == 0 {
+        println!("  {GREEN}■{RESET} {BOLD}All checks passed{RESET} ({passed} ok, {warned} warnings)");
+    } else {
+        println!("  {RED}■{RESET} {BOLD}{failed} issue(s) found{RESET} ({passed} ok, {warned} warnings)");
+        println!("    {DIM}Fix the issues above, then run 'yangzz --doctor' again{RESET}");
+    }
     println!();
 }

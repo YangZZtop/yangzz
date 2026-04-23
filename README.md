@@ -404,16 +404,17 @@ yangzz 的设计和实现参考了以下优秀的开源项目和社区成果：
 |------|------|
 | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) | REPL 交互范式、工具管道、⎿ 视觉语言 |
 | [Codex CLI](https://github.com/openai/codex) (OpenAI) | Agentic Loop 设计、沙箱隔离 |
-| [LegnaCode CLI](https://github.com/LegnaCode/cli) | 多 Provider 抽象、配置迁移思路 |
-| [nocode](https://github.com/nicepkg/nocode) | 中文原生 UI、金色主题灵感 |
-| [oh-my-claudecode](https://github.com/anthropics/oh-my-claudecode) | Hook 系统、Skill 加载机制 |
-| [Meta Kim](https://github.com/user/Meta_Kim) | 治理守护线、Orchestrator 模式、Meta Agent 架构 |
+| [LegnaCode CLI](https://github.com/LegnaOS/LegnaCode-cli) | 多 Provider 抽象、配置迁移思路 |
+| [nocode](https://github.com/telagod/nocode) | 终端 AI 助手、Rust 实现参考 |
+| [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) | Hook 系统、Skill 加载机制 |
+| [Meta Kim](https://github.com/KimYx0207/Meta_Kim) | 治理守护线、Orchestrator 模式、Meta Agent 架构 |
 | [code-yangzz](https://github.com/YangZZtop/code-yangzz) | 前身项目 — 记忆系统、Observatory、编排思路的原型 |
-| [Claude Code x OpenClaw Guide](https://github.com/user/Claude-Code-x-OpenClaw-Guide-Zh) | 中文社区实践参考 |
-| [darwin-skill](https://github.com/user/darwin-skill) | Skill 系统设计灵感 |
-| [learn-coding-agent](https://github.com/user/learn-coding-agent) | Agent Loop 学习参考 |
-| [huashu-design](https://github.com/user/huashu-design) | UI/UX 设计参考 |
-| [design.md](https://github.com/user/design.md) | 设计规范参考 |
+| [Claude Code x OpenClaw Guide](https://github.com/KimYx0207/Claude-Code-x-OpenClaw-Guide-Zh) | 中文社区实践参考 |
+| [darwin-skill](https://github.com/alchaincyf/darwin-skill) | Skill 系统设计灵感 |
+| [learn-coding-agent](https://github.com/sanbuphy/learn-coding-agent) | Agent Loop 架构学习参考 |
+| [huashu-design](https://github.com/alchaincyf/huashu-design) | UI/UX 设计参考 |
+| [design.md](https://github.com/google-labs-code/design.md) | 设计规范格式参考 |
+| [CCometixLine](https://github.com/Haleclipse/CCometixLine) | Rust 状态栏、Git 集成参考 |
 
 感谢所有参考项目的作者和贡献者。开源社区让我们站在巨人的肩膀上。
 

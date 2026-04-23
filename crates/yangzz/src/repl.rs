@@ -92,7 +92,22 @@ impl ReplRenderer {
         }
         let tw = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
         text.split('\n')
-            .map(|l| std::cmp::max(1, (l.len() + tw - 1) / tw))
+            .map(|l| {
+                // CJK-aware display width: CJK chars = 2 columns, others = 1
+                let display_width: usize = l.chars().map(|c| {
+                    if ('\u{2E80}'..='\u{9FFF}').contains(&c)
+                        || ('\u{F900}'..='\u{FAFF}').contains(&c)
+                        || ('\u{FE30}'..='\u{FE4F}').contains(&c)
+                        || ('\u{FF01}'..='\u{FF60}').contains(&c)
+                        || ('\u{20000}'..='\u{2FA1F}').contains(&c)
+                    {
+                        2
+                    } else {
+                        1
+                    }
+                }).sum();
+                std::cmp::max(1, (display_width + tw - 1) / tw)
+            })
             .sum()
     }
 
@@ -109,18 +124,30 @@ impl ReplRenderer {
         let text = pangu_skip_code(&raw);
 
         if self.streaming_lines > 0 && Self::has_markdown(&text) {
-            // Erase raw output
-            print!("\r");
-            for _ in 0..self.streaming_lines {
-                print!("\x1b[A\x1b[2K");
-            }
-            print!("\x1b[2K");
-            let _ = io::stdout().flush();
+            // Determine how many lines we can safely erase
+            let term_height = crossterm::terminal::size()
+                .map(|(_, h)| h as usize)
+                .unwrap_or(24);
+            let max_erase = term_height.saturating_sub(2);
 
-            // Re-render with markdown
+            if self.streaming_lines <= max_erase {
+                // Short enough: erase raw output and re-render
+                print!("\r");
+                for _ in 0..self.streaming_lines {
+                    print!("\x1b[A\x1b[2K");
+                }
+                print!("\x1b[2K");
+                let _ = io::stdout().flush();
+            } else {
+                // Long output: raw was suppressed (showed progress counter)
+                // Erase the progress counter line
+                print!("\r\x1b[2K");
+                let _ = io::stdout().flush();
+            }
+
+            // Render with markdown
             let skin = make_skin();
             let formatted = skin.term_text(&text);
-            // Add ⎿ continuation prefix to each line
             for (i, line) in format!("{formatted}").lines().enumerate() {
                 if i == 0 {
                     println!("{GOLD}⎿{RESET} {line}");
@@ -163,9 +190,25 @@ impl Renderer for ReplRenderer {
         }
         self.streaming_text.push_str(text);
         self.streaming_lines = Self::count_display_lines(&self.streaming_text);
-        // Print raw text as it streams (will be replaced by markdown on flush)
-        print!("{text}");
-        let _ = io::stdout().flush();
+
+        let term_height = crossterm::terminal::size()
+            .map(|(_, h)| h as usize)
+            .unwrap_or(24);
+        let max_erasable = term_height.saturating_sub(2);
+
+        if self.streaming_lines <= max_erasable {
+            // Short enough to erase later — stream raw text for responsiveness
+            print!("{text}");
+            let _ = io::stdout().flush();
+        } else if self.streaming_lines == max_erasable + 1 {
+            // Just crossed the threshold — show progress indicator instead
+            print!("\r\x1b[2K  {DIM}[streaming... {} chars]{RESET}", self.streaming_text.len());
+            let _ = io::stdout().flush();
+        } else {
+            // Still accumulating — update counter
+            print!("\r\x1b[2K  {DIM}[streaming... {} chars]{RESET}", self.streaming_text.len());
+            let _ = io::stdout().flush();
+        }
     }
 
     fn render_tool_start(&mut self, name: &str, _id: &str) {

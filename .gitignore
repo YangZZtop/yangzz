@@ -15,7 +15,8 @@ Thumbs.db
 
 # npm
 npm/node_modules/
-npm/bin/
+npm/bin/yangzz
+npm/bin/yangzz.exe
 
 # SDK
 sdk/typescript/node_modules/

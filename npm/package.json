@@ -1,9 +1,9 @@
 {
   "name": "yangzz",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI coding assistant — any model, one variable, ready to go",
   "bin": {
-    "yangzz": "bin/yangzz"
+    "yangzz": "bin/yangzz.js"
   },
   "scripts": {
     "postinstall": "node install.js"

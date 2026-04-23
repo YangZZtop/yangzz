@@ -29,24 +29,33 @@ function getTarget() {
 function tryDownload(target) {
   const url = `https://github.com/YangZZtop/yangzz/releases/download/v${PACKAGE_VERSION}/yangzz-${target}${EXT}`;
   console.log(`Downloading yangzz v${PACKAGE_VERSION} for ${target}...`);
+  console.log(`  URL: ${url}`);
 
-  try {
-    // Use curl/wget for simplicity and redirect following
-    if (os.platform() !== "win32") {
-      execSync(`curl -fsSL "${url}" -o "${BIN_PATH}" && chmod +x "${BIN_PATH}"`, {
-        stdio: "inherit",
-        timeout: 60000,
-      });
-    } else {
-      execSync(`powershell -Command "Invoke-WebRequest -Uri '${url}' -OutFile '${BIN_PATH}'"`, {
-        stdio: "inherit",
-        timeout: 60000,
-      });
+  const cmds = os.platform() === "win32"
+    ? [
+        // Windows 10+ has curl.exe in System32 (not PowerShell alias)
+        `curl.exe -fsSL "${url}" -o "${BIN_PATH}"`,
+        // Fallback: PowerShell with redirect following
+        `powershell -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -Uri '${url}' -OutFile '${BIN_PATH}' -UseBasicParsing -MaximumRedirection 5"`,
+      ]
+    : [
+        `curl -fsSL "${url}" -o "${BIN_PATH}" && chmod +x "${BIN_PATH}"`,
+      ];
+
+  for (const cmd of cmds) {
+    try {
+      execSync(cmd, { stdio: "inherit", timeout: 120000 });
+      if (fs.existsSync(BIN_PATH) && fs.statSync(BIN_PATH).size > 1000) {
+        if (os.platform() !== "win32") {
+          fs.chmodSync(BIN_PATH, 0o755);
+        }
+        return true;
+      }
+    } catch (e) {
+      console.log(`  Download attempt failed: ${e.message || "unknown error"}`);
     }
-    return fs.existsSync(BIN_PATH) && fs.statSync(BIN_PATH).size > 1000;
-  } catch {
-    return false;
   }
+  return false;
 }
 
 // Strategy 2: Check if `yangzz` is already on PATH (e.g. cargo install)

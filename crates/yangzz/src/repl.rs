@@ -422,7 +422,7 @@ pub async fn run(
                 cmd, arg,
                 &mut current_model, &mut current_provider,
                 &mut messages, &mut session, &mut stats, &mut renderer,
-                executor, &skills,
+                executor, &skills, settings,
             );
 
             match handled {
@@ -450,6 +450,85 @@ pub async fn run(
         };
 
         println!();
+
+        // ── Check for team directives (e.g. "Claude写前端，GPT写后端，帮我重构") ──
+        let directive_result = yangzz_core::provider::router::parse_directives(input);
+
+        if directive_result.has_directives && settings.providers.len() > 1 {
+            // User gave natural language team assignments!
+            println!("  {BOLD_GOLD}🏗 Team mode detected:{RESET}");
+            for d in &directive_result.directives {
+                println!("    {GOLD}{}{RESET} → {BOLD}{}{RESET}", d.domain.as_str(), d.model_hint);
+            }
+            println!("  {DIM}Task: {}{RESET}", directive_result.task);
+            println!();
+
+            let strategy = yangzz_core::provider::router::directives_to_strategy(&directive_result.directives);
+
+            // Build provider list: match model hints to configured providers
+            let available_providers: Vec<(String, Arc<dyn Provider>, String)> = settings.providers.iter()
+                .filter_map(|ep| {
+                    // Wrap ExtraProvider as a Settings to call resolve_provider
+                    let tmp_settings = Settings {
+                        provider: Some(ep.name.clone()),
+                        api_key: Some(ep.api_key.clone()),
+                        base_url: Some(ep.base_url.clone()),
+                        api_format: ep.api_format.clone(),
+                        providers: vec![ep.clone()],
+                        ..Settings::default()
+                    };
+                    let provider_arc = match config::resolve_provider(&tmp_settings) {
+                        Ok(p) => p,
+                        Err(_) => return None,
+                    };
+                    let model = ep.default_model.clone().unwrap_or_default();
+                    Some((ep.name.clone(), provider_arc, model))
+                })
+                .collect();
+
+            // Map model hints (claude, openai) to actual provider names
+            let mapped_providers: Vec<(String, Arc<dyn Provider>, String)> = directive_result.directives.iter()
+                .filter_map(|d| {
+                    // Find a provider whose name contains the model hint
+                    available_providers.iter()
+                        .find(|(name, _, model)| {
+                            let lower_name = name.to_lowercase();
+                            let lower_model = model.to_lowercase();
+                            lower_name.contains(&d.model_hint) || lower_model.contains(&d.model_hint)
+                        })
+                        .cloned()
+                })
+                .collect();
+
+            if !mapped_providers.is_empty() {
+                messages.push(Message::user(&directive_result.task));
+                let start = Instant::now();
+                let result = yangzz_core::team::execute_with_strategy(
+                    &directive_result.task,
+                    &strategy,
+                    &mapped_providers,
+                    executor,
+                    &mut renderer,
+                    max_tokens,
+                ).await;
+                let elapsed = start.elapsed().as_secs_f64();
+
+                match result {
+                    Ok(_response) => {
+                        status::render_turn_info(elapsed);
+                        status::render_status_bar(&stats);
+                    }
+                    Err(e) => {
+                        renderer.render_error(&format!("{e}"));
+                    }
+                }
+                println!();
+                continue;
+            } else {
+                println!("  {DIM}(providers not matched, falling back to single model){RESET}");
+            }
+        }
+
         messages.push(Message::user(input));
 
         // ── Run agentic loop ──
@@ -506,6 +585,7 @@ fn handle_command(
     renderer: &mut ReplRenderer,
     executor: &ToolExecutor,
     skills: &[Skill],
+    settings: &Settings,
 ) -> CommandResult {
     match cmd {
         "/quit" | "/exit" | "/q" => {
@@ -651,11 +731,72 @@ fn handle_command(
             if arg.is_empty() {
                 println!("  {DIM}Usage: /route <prompt> — show which model would be selected{RESET}");
             } else {
-                let router = yangzz_core::provider::router::ModelRouter::new();
-                let decision = router.route(arg, &["openai", "anthropic", "deepseek", "gemini"]);
-                println!("  {BOLD}Complexity:{RESET} {:?}", decision.complexity);
-                println!("  {BOLD}Model:{RESET} {}", decision.model);
-                println!("  {DIM}{}{RESET}", decision.reason);
+                // Try strategy routing first
+                if let Some(ref strategy) = settings.strategy {
+                    let router = yangzz_core::provider::router::StrategyRouter::new(strategy);
+                    let decision = router.route(arg);
+                    println!("  {BOLD}Strategy Route:{RESET}");
+                    println!("    {GOLD}Domain:{RESET}   {}", decision.domain.as_str());
+                    println!("    {GOLD}Provider:{RESET} {}", decision.provider_name);
+                    println!("    {DIM}{}{RESET}", decision.reason);
+
+                    // Show decomposition for complex tasks
+                    let tasks = router.decompose_task(arg);
+                    if tasks.len() > 1 {
+                        println!();
+                        println!("  {BOLD}Multi-domain decomposition:{RESET}");
+                        for (domain, _) in &tasks {
+                            let pn = router.provider_for_domain(*domain).unwrap_or_default();
+                            println!("    {GOLD}{}{RESET} → {}", domain.as_str(), pn);
+                        }
+                    }
+                } else {
+                    // Fallback to basic complexity router
+                    let router = yangzz_core::provider::router::ModelRouter::new();
+                    let decision = router.route(arg, &["openai", "anthropic", "deepseek", "gemini"]);
+                    println!("  {BOLD}Complexity:{RESET} {:?}", decision.complexity);
+                    println!("  {BOLD}Model:{RESET} {}", decision.model);
+                    println!("  {DIM}{}{RESET}", decision.reason);
+                    println!();
+                    println!("  {DIM}Tip: 配置 [strategy] 启用多模型自动路由{RESET}");
+                }
+            }
+            CommandResult::Continue
+        }
+
+        "/strategy" => {
+            if let Some(ref strategy) = settings.strategy {
+                println!("  {BOLD}Strategy Config:{RESET}");
+                println!("    {GOLD}Mode:{RESET} {}", strategy.mode);
+                println!();
+                println!("  {BOLD}Role → Provider:{RESET}");
+                let show = |name: &str, v: &Option<String>| {
+                    if let Some(p) = v {
+                        println!("    {GOLD}{:<12}{RESET} → {BOLD}{}{RESET}", name, p);
+                    } else {
+                        println!("    {DIM}{:<12} → (not set){RESET}", name);
+                    }
+                };
+                show("planner", &strategy.roles.planner);
+                show("frontend", &strategy.roles.frontend);
+                show("backend", &strategy.roles.backend);
+                show("review", &strategy.roles.review);
+                show("test", &strategy.roles.test);
+                show("general", &strategy.roles.general);
+            } else {
+                println!("  {DIM}No [strategy] section in config.{RESET}");
+                println!("  Add to config.toml:");
+                println!();
+                println!("    {BOLD}[strategy]{RESET}");
+                println!("    {BOLD}mode = \"auto\"{RESET}");
+                println!();
+                println!("    {BOLD}[strategy.roles]{RESET}");
+                println!("    {BOLD}planner = \"claude-relay\"{RESET}");
+                println!("    {BOLD}frontend = \"claude-relay\"{RESET}");
+                println!("    {BOLD}backend = \"openai-relay\"{RESET}");
+                println!("    {BOLD}review = \"gemini-relay\"{RESET}");
+                println!("    {BOLD}test = \"deepseek-relay\"{RESET}");
+                println!("    {BOLD}general = \"openai-relay\"{RESET}");
             }
             CommandResult::Continue
         }
@@ -778,6 +919,7 @@ fn all_commands(skills: &[Skill]) -> Vec<(String, String)> {
         ("/migrate".into(), "Import config from Claude Code/Codex/Cursor".into()),
         ("/task".into(), "Task queue: list/add/done/cancel".into()),
         ("/route".into(), "Smart model routing preview".into()),
+        ("/strategy".into(), "View multi-agent strategy config".into()),
         ("/profile".into(), "Auto-detected project profile".into()),
         ("/policy".into(), "Show execution policy".into()),
         ("/guide".into(), "Quick-start guide".into()),
@@ -869,6 +1011,7 @@ fn print_help(skills: &[Skill]) {
     println!("    {GOLD}/migrate{RESET}         Import from Claude Code/Codex/Cursor");
     println!("    {GOLD}/task{RESET}    {DIM}[cmd]{RESET}    Task queue: list/add/done/cancel");
     println!("    {GOLD}/route{RESET}   {DIM}<prompt>{RESET} Smart model routing preview");
+    println!("    {GOLD}/strategy{RESET}         Multi-agent strategy config");
     println!("    {GOLD}/profile{RESET}          Auto-detected project profile");
     println!("    {GOLD}/policy{RESET}           Show execution policy");
     println!("    {GOLD}/guide{RESET}            Quick-start guide");

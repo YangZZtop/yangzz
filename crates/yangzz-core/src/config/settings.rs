@@ -22,6 +22,90 @@ pub struct Settings {
     /// Extra providers configured in [[providers]] sections
     #[serde(default)]
     pub providers: Vec<ExtraProvider>,
+    /// Multi-agent strategy configuration
+    #[serde(default)]
+    pub strategy: Option<StrategyConfig>,
+}
+
+/// Strategy configuration — user defines which model does what
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StrategyConfig {
+    /// "auto" (route by keywords), "manual" (user picks), "team" (parallel multi-agent)
+    #[serde(default = "default_strategy_mode")]
+    pub mode: String,
+    /// Role → provider name mapping (user decides who does what)
+    #[serde(default)]
+    pub roles: StrategyRoles,
+    /// Custom keyword → role mapping (optional override)
+    #[serde(default)]
+    pub keywords: StrategyKeywords,
+}
+
+fn default_strategy_mode() -> String { "auto".to_string() }
+
+/// Maps each role to a provider name from [[providers]]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StrategyRoles {
+    /// Architecture planning, system design
+    pub planner: Option<String>,
+    /// Frontend: React, Vue, CSS, HTML, UI components
+    pub frontend: Option<String>,
+    /// Backend: API, database, server logic
+    pub backend: Option<String>,
+    /// Code review, optimization
+    pub review: Option<String>,
+    /// Testing: unit tests, integration tests
+    pub test: Option<String>,
+    /// Fallback for unclassified tasks
+    pub general: Option<String>,
+}
+
+/// Custom keywords per role (user can override defaults)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StrategyKeywords {
+    #[serde(default = "default_frontend_keywords")]
+    pub frontend: Vec<String>,
+    #[serde(default = "default_backend_keywords")]
+    pub backend: Vec<String>,
+    #[serde(default = "default_review_keywords")]
+    pub review: Vec<String>,
+    #[serde(default = "default_test_keywords")]
+    pub test: Vec<String>,
+    #[serde(default = "default_planner_keywords")]
+    pub planner: Vec<String>,
+}
+
+impl Default for StrategyKeywords {
+    fn default() -> Self {
+        Self {
+            frontend: default_frontend_keywords(),
+            backend: default_backend_keywords(),
+            review: default_review_keywords(),
+            test: default_test_keywords(),
+            planner: default_planner_keywords(),
+        }
+    }
+}
+
+fn default_frontend_keywords() -> Vec<String> {
+    ["react", "vue", "svelte", "css", "html", "tailwind", "component", "page", "UI", "layout", "style",
+     "组件", "页面", "前端", "样式", "布局"].iter().map(|s| s.to_string()).collect()
+}
+fn default_backend_keywords() -> Vec<String> {
+    ["api", "database", "server", "route", "endpoint", "migration", "sql", "redis", "queue",
+     "接口", "后端", "数据库", "路由", "服务"].iter().map(|s| s.to_string()).collect()
+}
+fn default_review_keywords() -> Vec<String> {
+    ["review", "audit", "check", "optimize", "refine", "improve",
+     "审查", "检查", "优化", "改进"].iter().map(|s| s.to_string()).collect()
+}
+fn default_test_keywords() -> Vec<String> {
+    ["test", "spec", "assert", "mock", "fixture", "coverage",
+     "测试", "断言", "覆盖率"].iter().map(|s| s.to_string()).collect()
+}
+fn default_planner_keywords() -> Vec<String> {
+    ["architecture", "design", "plan", "refactor", "migrate", "system",
+     "架构", "设计", "规划", "重构", "迁移", "系统"].iter().map(|s| s.to_string()).collect()
 }
 
 /// An extra provider configured in yangzz config files

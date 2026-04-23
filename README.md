@@ -47,7 +47,7 @@ cargo install --path crates/yangzz
 # ⚠️ 只需要改这 3 行 ⚠️
 MY_KEY="sk-你的key"                        # 中转商给你的 key
 MY_URL="https://你的中转地址"               # 中转商给你的地址
-MY_MODEL="claude-sonnet-4-20250514"        # 默认模型
+MY_MODEL="claude-sonnet-4-20250514"        # 默认模型（改成你想用的，如 gpt-4o、deepseek-chat 等）
 
 # —— 以下不用动 ——
 if [ "$(uname)" = "Darwin" ]; then
@@ -65,6 +65,8 @@ name = "my-relay"
 api_key = "$MY_KEY"
 base_url = "$MY_URL"
 default_model = "$MY_MODEL"
+# api_format 指的是中转商的接口协议，不是模型品牌
+# 国内中转站几乎都用 OpenAI 兼容协议，即使调 Claude/DeepSeek 也填 openai
 api_format = "openai"
 EOF
 echo "✅ 配置已写入: $DIR/config.toml"
@@ -80,7 +82,7 @@ echo "🚀 现在运行 yangzz 即可开始！"
 # ⚠️ 只需要改这 3 行 ⚠️
 $MY_KEY = "sk-你的key"                       # 中转商给你的 key
 $MY_URL = "https://你的中转地址"              # 中转商给你的地址
-$MY_MODEL = "claude-sonnet-4-20250514"       # 默认模型
+$MY_MODEL = "claude-sonnet-4-20250514"       # 默认模型（改成你想用的，如 gpt-4o、deepseek-chat 等）
 
 # —— 以下不用动 ——
 $dir = "$env:APPDATA\yangzz"
@@ -94,6 +96,8 @@ name = "my-relay"
 api_key = "$MY_KEY"
 base_url = "$MY_URL"
 default_model = "$MY_MODEL"
+# api_format 指的是中转商的接口协议，不是模型品牌
+# 国内中转站几乎都用 OpenAI 兼容协议，即使调 Claude/DeepSeek 也填 openai
 api_format = "openai"
 "@ | Out-File -Encoding utf8 "$dir\config.toml"
 Write-Host "✅ 配置已写入: $dir\config.toml"

@@ -168,8 +168,8 @@ pub fn print_guide() {
     println!("    {BOLD}default_model = \"claude-sonnet-4-20250514\"{RESET}");
     println!("    {BOLD}api_format = \"openai\"{RESET}          {DIM}# 绝大多数中转都是 openai 格式{RESET}");
     println!("    {BOLD}max_tokens = 16384{RESET}             {DIM}# 单次最大输出（可选）{RESET}");
-    println!("    {BOLD}thinking_budget = 10000{RESET}        {DIM}# 思考深度（可选）{RESET}");
-    println!("    {BOLD}context_window = 200000{RESET}        {DIM}# 上下文窗口（可选）{RESET}");
+    println!("    {BOLD}thinking_budget = 32000{RESET}        {DIM}# 思考深度（可选）{RESET}");
+    println!("    {BOLD}context_window = 1000000{RESET}       {DIM}# 上下文窗口（可选，主流模型已 1M）{RESET}");
     println!("    {BOLD}reasoning_effort = \"medium\"{RESET}    {DIM}# 推理强度 low/medium/high（可选）{RESET}");
     println!("    {BOLD}temperature = 0.7{RESET}              {DIM}# 创造性 0~1（可选）{RESET}");
     println!();
@@ -224,6 +224,7 @@ pub fn print_guide() {
     println!("    {GOLD}行尾 \\{RESET}    多行输入");
     println!();
     println!("  {DIM}配置向导: yangzz --setup{RESET}");
+    println!("  {DIM}健康检查: yangzz --doctor{RESET}");
     println!();
 }
 
@@ -277,8 +278,8 @@ fn run_setup_wizard() {
 
     println!("  {DIM}# ── 更多可选配置 ──{RESET}");
     println!("    {DIM}max_tokens = 16384{RESET}             {DIM}# 单次最大输出{RESET}");
-    println!("    {DIM}thinking_budget = 10000{RESET}        {DIM}# 思考 token 预算{RESET}");
-    println!("    {DIM}context_window = 200000{RESET}        {DIM}# 上下文窗口{RESET}");
+    println!("    {DIM}thinking_budget = 32000{RESET}        {DIM}# 思考 token 预算{RESET}");
+    println!("    {DIM}context_window = 1000000{RESET}       {DIM}# 上下文窗口（主流 1M）{RESET}");
     println!("    {DIM}reasoning_effort = \"medium\"{RESET}    {DIM}# low / medium / high{RESET}");
     println!("    {DIM}temperature = 0.7{RESET}              {DIM}# 创造性 0~1{RESET}");
     println!();

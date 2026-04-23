@@ -83,8 +83,10 @@ async fn main() -> anyhow::Result<()> {
 
     // --setup flag: always run wizard
     if cli.setup {
-        run_setup_wizard();
-        return Ok(());
+        if !run_setup_wizard() {
+            return Ok(());
+        }
+        // Wizard succeeded — fall through to start REPL
     }
 
     // --doctor flag: health check
@@ -105,9 +107,28 @@ async fn main() -> anyhow::Result<()> {
     let provider = match config::resolve_provider(&settings) {
         Ok(p) => p,
         Err(_e) => {
-            run_setup_wizard();
-            std::process::exit(0);
+            if run_setup_wizard() {
+                // Reload settings after wizard wrote config
+                let new_settings = Settings::load(CliOverrides::default());
+                match config::resolve_provider(&new_settings) {
+                    Ok(p) => p,
+                    Err(e2) => {
+                        println!("  {RED}✖{RESET} 配置后仍无法连接: {e2}");
+                        println!("    {DIM}请检查配置文件或运行 yangzz --doctor{RESET}");
+                        std::process::exit(1);
+                    }
+                }
+            } else {
+                std::process::exit(0);
+            }
         }
+    };
+
+    // Re-load settings in case wizard just wrote a new config
+    let settings = if cli.setup {
+        Settings::load(CliOverrides::default())
+    } else {
+        settings
     };
 
     let model = settings.resolved_model();
@@ -228,9 +249,30 @@ pub fn print_guide() {
     println!();
 }
 
-// ── First-time Setup Wizard ──
+// ── Interactive Setup Wizard ──
 
-fn run_setup_wizard() {
+/// Returns true if setup succeeded and caller should continue into REPL
+fn run_setup_wizard() -> bool {
+    use std::io::{self, Write};
+
+    fn prompt(msg: &str) -> String {
+        print!("  {msg}");
+        io::stdout().flush().unwrap();
+        let mut buf = String::new();
+        io::stdin().read_line(&mut buf).unwrap();
+        buf.trim().to_string()
+    }
+
+    fn prompt_default(msg: &str, default: &str) -> String {
+        print!("  {msg} {DIM}[{default}]{RESET}: ");
+        io::stdout().flush().unwrap();
+        let mut buf = String::new();
+        io::stdin().read_line(&mut buf).unwrap();
+        let val = buf.trim().to_string();
+        if val.is_empty() { default.to_string() } else { val }
+    }
+
+    // ── Banner ──
     println!();
     println!("  {BOLD_GOLD} █████ ████  ██████   ████████    ███████  █████████  █████████{RESET}");
     println!("  {BOLD_GOLD} ░░███ ░███  ░░░░░███ ░░███░░███  ███░░███ ░█░░░░███  ░█░░░░███{RESET}");
@@ -244,67 +286,194 @@ fn run_setup_wizard() {
     println!();
     println!("  {BOLD}欢迎使用 yangzz！{RESET} {DIM}AI coding assistant — 多模型、多中转、开箱即用{RESET}");
     println!();
+
+    // ── Check env vars first ──
+    let env_keys = [
+        ("OPENAI_API_KEY", "openai", "https://api.openai.com", "gpt-4o"),
+        ("ANTHROPIC_API_KEY", "anthropic", "https://api.anthropic.com", "claude-sonnet-4-20250514"),
+        ("DEEPSEEK_API_KEY", "deepseek", "https://api.deepseek.com", "deepseek-chat"),
+        ("GEMINI_API_KEY", "gemini", "https://generativelanguage.googleapis.com", "gemini-2.5-pro"),
+    ];
+    for (env_var, name, _base, model) in &env_keys {
+        if let Ok(key) = std::env::var(env_var) {
+            if !key.is_empty() {
+                println!("  {GREEN}✓{RESET} 检测到环境变量 {BOLD}{env_var}{RESET}");
+                let choice = prompt_default(
+                    &format!("使用 {name} ({model}) 吗？(y/n)"),
+                    "y",
+                );
+                if choice.to_lowercase().starts_with('y') {
+                    println!();
+                    println!("  {GREEN}✓{RESET} 直接使用环境变量，无需额外配置！");
+                    println!();
+                    return true;
+                }
+            }
+        }
+    }
+
+    // ── Choose mode ──
     println!("  ──────────────────");
     println!();
-    println!("  {BOLD_GOLD}第一步：创建配置文件{RESET}");
+    println!("  {BOLD_GOLD}选择你的使用方式：{RESET}");
+    println!();
+    println!("    {GOLD}1{RESET}  中转站（有中转商给的 地址 + Key）  {DIM}← 最常见{RESET}");
+    println!("    {GOLD}2{RESET}  官方 API（直连 OpenAI / Anthropic 等）");
+    println!("    {GOLD}3{RESET}  本地 Ollama（免费、离线）");
+    println!();
+    let mode = prompt_default("请选择", "1");
     println!();
 
-    // Detect config path
-    let config_path = if cfg!(target_os = "macos") {
-        "~/Library/Application Support/yangzz/config.toml".to_string()
-    } else if cfg!(target_os = "windows") {
-        "%APPDATA%\\yangzz\\config.toml".to_string()
+    let (provider_name, api_key, base_url, default_model, api_format);
+
+    match mode.as_str() {
+        "2" => {
+            // Official API
+            println!("  {BOLD_GOLD}官方 API 配置{RESET}");
+            println!();
+            println!("    {GOLD}1{RESET}  OpenAI (GPT-4o, GPT-5.4...)");
+            println!("    {GOLD}2{RESET}  Anthropic (Claude Sonnet, Opus...)");
+            println!("    {GOLD}3{RESET}  DeepSeek");
+            println!("    {GOLD}4{RESET}  Google Gemini");
+            println!();
+            let vendor = prompt_default("选择服务商", "1");
+            let (name, url, model, fmt) = match vendor.as_str() {
+                "2" => ("anthropic", "https://api.anthropic.com", "claude-sonnet-4-20250514", "anthropic"),
+                "3" => ("deepseek", "https://api.deepseek.com", "deepseek-chat", "openai"),
+                "4" => ("gemini", "https://generativelanguage.googleapis.com", "gemini-2.5-pro", "openai"),
+                _ => ("openai", "https://api.openai.com", "gpt-4o", "openai"),
+            };
+            println!();
+            api_key = prompt(&format!("{BOLD}请输入 API Key: {RESET}"));
+            if api_key.is_empty() {
+                println!("  {RED}✖{RESET} API Key 不能为空");
+                return false;
+            }
+            provider_name = name.to_string();
+            base_url = url.to_string();
+            default_model = prompt_default("默认模型", model);
+            api_format = fmt.to_string();
+        }
+        "3" => {
+            // Local Ollama
+            println!("  {BOLD_GOLD}Ollama 本地模型{RESET}");
+            println!();
+            provider_name = "ollama".to_string();
+            api_key = "ollama".to_string();
+            base_url = prompt_default("Ollama 地址", "http://localhost:11434");
+            default_model = prompt_default("默认模型", "llama3");
+            api_format = "openai".to_string();
+        }
+        _ => {
+            // Relay (most common)
+            println!("  {BOLD_GOLD}中转站配置{RESET}");
+            println!("  {DIM}（从你的中转商那里拿到 地址 和 Key）{RESET}");
+            println!();
+            api_key = prompt(&format!("{BOLD}请输入 API Key: {RESET}"));
+            if api_key.is_empty() {
+                println!("  {RED}✖{RESET} API Key 不能为空");
+                return false;
+            }
+            base_url = prompt(&format!("{BOLD}请输入中转地址: {RESET}"));
+            if base_url.is_empty() {
+                println!("  {RED}✖{RESET} 中转地址不能为空");
+                return false;
+            }
+            provider_name = "my-relay".to_string();
+            default_model = prompt_default("默认模型", "claude-sonnet-4-20250514");
+            // api_format is always openai for relays
+            api_format = "openai".to_string();
+            println!();
+            println!("  {DIM}提示: api_format 已自动设为 \"openai\"（国内中转站几乎都是 OpenAI 兼容协议，{RESET}");
+            println!("  {DIM}即使调 Claude / DeepSeek 也是这个格式）{RESET}");
+        }
+    }
+
+    // ── Write config file ──
+    let config_dir = if cfg!(target_os = "macos") {
+        dirs::data_dir().map(|d| d.join("yangzz"))
     } else {
-        "~/.config/yangzz/config.toml".to_string()
+        dirs::config_dir().map(|d| d.join("yangzz"))
     };
-    println!("  在以下路径创建配置文件：");
-    println!("    {BOLD}{config_path}{RESET}");
+
+    let Some(dir) = config_dir else {
+        println!("  {RED}✖{RESET} 无法确定配置目录");
+        return false;
+    };
+
+    let config_path = dir.join("config.toml");
+
+    // Check if config already exists
+    if config_path.exists() {
+        println!();
+        let overwrite = prompt_default(
+            &format!("{YELLOW}⚠{RESET}  配置文件已存在，是否覆盖？(y/n)"),
+            "n",
+        );
+        if !overwrite.to_lowercase().starts_with('y') {
+            println!("  已取消。");
+            return false;
+        }
+    }
+
+    // Create directory
+    if let Err(e) = std::fs::create_dir_all(&dir) {
+        println!("  {RED}✖{RESET} 创建目录失败: {e}");
+        return false;
+    }
+
+    // Build TOML content
+    let toml_content = format!(
+        r#"provider = "{provider_name}"
+model = "{default_model}"
+
+[[providers]]
+name = "{provider_name}"
+api_key = "{api_key}"
+base_url = "{base_url}"
+default_model = "{default_model}"
+api_format = "{api_format}"
+"#
+    );
+
+    // Write file
+    if let Err(e) = std::fs::write(&config_path, &toml_content) {
+        println!("  {RED}✖{RESET} 写入配置失败: {e}");
+        return false;
+    }
+
+    println!();
+    println!("  {GREEN}✓{RESET} 配置已写入: {BOLD}{}{RESET}", config_path.display());
     println!();
 
-    println!("  {BOLD_GOLD}第二步：写入配置（复制粘贴即可）{RESET}");
-    println!();
-    println!("  {DIM}# ── 用中转站（最常见）──{RESET}");
-    println!();
-    println!("    {BOLD}provider = \"my-relay\"{RESET}");
-    println!("    {BOLD}model = \"claude-sonnet-4-20250514\"{RESET}");
-    println!();
-    println!("    {BOLD}[[providers]]{RESET}");
-    println!("    {BOLD}name = \"my-relay\"{RESET}              {DIM}# 随便起个名字{RESET}");
-    println!("    {BOLD}api_key = \"sk-你的key\"{RESET}         {DIM}# 中转商给你的 key{RESET}");
-    println!("    {BOLD}base_url = \"https://你的中转地址\"{RESET}  {DIM}# 中转商给你的地址{RESET}");
-    println!("    {BOLD}default_model = \"claude-sonnet-4-20250514\"{RESET}");
-    println!("    {BOLD}api_format = \"openai\"{RESET}          {DIM}# 绝大多数中转都是 openai 格式{RESET}");
-    println!();
+    // ── Validate connection ──
+    println!("  {DIM}验证连接中...{RESET}");
 
-    println!("  {DIM}# ── 更多可选配置 ──{RESET}");
-    println!("    {DIM}max_tokens = 16384{RESET}             {DIM}# 单次最大输出{RESET}");
-    println!("    {DIM}thinking_budget = 32000{RESET}        {DIM}# 思考 token 预算{RESET}");
-    println!("    {DIM}context_window = 1000000{RESET}       {DIM}# 上下文窗口（主流 1M）{RESET}");
-    println!("    {DIM}reasoning_effort = \"medium\"{RESET}    {DIM}# low / medium / high{RESET}");
-    println!("    {DIM}temperature = 0.7{RESET}              {DIM}# 创造性 0~1{RESET}");
-    println!();
+    // Quick validation: try to create provider
+    let test_settings = Settings::load(CliOverrides::default());
+    match config::resolve_provider(&test_settings) {
+        Ok(p) => {
+            println!("  {GREEN}✓{RESET} Provider 创建成功: {BOLD}{}{RESET} → {}", p.name(), default_model);
+        }
+        Err(e) => {
+            println!("  {YELLOW}⚠{RESET} Provider 创建异常: {e}");
+            println!("    {DIM}配置已保存，可以稍后用 yangzz --doctor 排查{RESET}");
+        }
+    }
 
-    println!("  {DIM}# ── 用本地 Ollama（免费、离线）──{RESET}");
     println!();
-    println!("    {DIM}[[providers]]{RESET}");
-    println!("    {DIM}name = \"local\"{RESET}");
-    println!("    {DIM}api_key = \"ollama\"{RESET}");
-    println!("    {DIM}base_url = \"http://localhost:11434\"{RESET}");
-    println!("    {DIM}default_model = \"llama3\"{RESET}");
-    println!();
-
     println!("  ──────────────────");
     println!();
-    println!("  {BOLD_GOLD}第三步：启动{RESET}");
+    println!("  {BOLD_GOLD}配置完成！{RESET}");
     println!();
-    println!("    {BOLD}yangzz{RESET}");
+    println!("  {DIM}提示：{RESET}");
+    println!("    {DIM}• 对话中 /model 可切换模型{RESET}");
+    println!("    {DIM}• 在 config.toml 中添加更多 [[providers]] 配置多个中转{RESET}");
+    println!("    {DIM}• yangzz --guide 查看完整指南{RESET}");
+    println!("    {DIM}• yangzz --doctor 健康检查{RESET}");
     println!();
 
-    println!("  {DIM}提示：{RESET}");
-    println!("    {DIM}• 可以写多个 [[providers]]，对话中 /model 切换{RESET}");
-    println!("    {DIM}• 项目级配置: 项目根目录 .yangzz.toml 覆盖全局{RESET}");
-    println!("    {DIM}• 完整指南: yangzz --guide{RESET}");
-    println!();
+    true
 }
 
 // ── Health Check (yangzz --doctor) ──

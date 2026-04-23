@@ -106,6 +106,58 @@ Write-Host "🚀 现在运行 yangzz 即可开始！"
 
 </details>
 
+<details>
+<summary><b>🔀 多个中转？（如 A 中转用 GPT，B 中转用 Claude）</b>（点击展开）</summary>
+
+写多个 `[[providers]]` 即可，对话中 `/model` 随时切换：
+
+```bash
+# ⚠️ 改成你自己的 ⚠️
+A_KEY="sk-aaa"                             # A 中转的 key
+A_URL="https://a-relay.example.com"        # A 中转的地址
+B_KEY="sk-bbb"                             # B 中转的 key
+B_URL="https://b-relay.example.com"        # B 中转的地址
+
+# —— 以下不用动 ——
+if [ "$(uname)" = "Darwin" ]; then
+  DIR="$HOME/Library/Application Support/yangzz"
+else
+  DIR="$HOME/.config/yangzz"
+fi
+mkdir -p "$DIR"
+cat > "$DIR/config.toml" << EOF
+provider = "a-relay"
+model = "gpt-4o"
+
+# A 中转（GPT 系列）
+[[providers]]
+name = "a-relay"
+api_key = "$A_KEY"
+base_url = "$A_URL"
+default_model = "gpt-4o"
+api_format = "openai"
+
+# B 中转（Claude 系列）
+[[providers]]
+name = "b-relay"
+api_key = "$B_KEY"
+base_url = "$B_URL"
+default_model = "claude-sonnet-4-20250514"
+api_format = "openai"
+EOF
+echo "✅ 配置已写入: $DIR/config.toml"
+echo "🚀 对话中用 /model 切换模型，yangzz 会自动匹配对应的中转"
+```
+
+切换方式：
+```
+/model gpt-4o                    ← 自动走 A 中转
+/model claude-sonnet-4-20250514  ← 自动走 B 中转
+/model deepseek-chat             ← 如果还配了 C 中转，自动走 C
+```
+
+</details>
+
 > 💡 配完后可以运行 `yangzz --doctor` 检查配置是否正确。
 
 <details>

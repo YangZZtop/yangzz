@@ -36,10 +36,78 @@ npm install -g yangzz
 cargo install --path crates/yangzz
 ```
 
-### 配置
+### 一键配置
 
-创建配置文件（**API Key 只存在这个文件里，不影响其他工具**）：
+**把下面脚本中的 3 个值改成你自己的，复制粘贴到终端执行即可：**
 
+<details>
+<summary><b>🍎 macOS / 🐧 Linux</b>（点击展开）</summary>
+
+```bash
+# ⚠️ 只需要改这 3 行 ⚠️
+MY_KEY="sk-你的key"                        # 中转商给你的 key
+MY_URL="https://你的中转地址"               # 中转商给你的地址
+MY_MODEL="claude-sonnet-4-20250514"        # 默认模型
+
+# —— 以下不用动 ——
+if [ "$(uname)" = "Darwin" ]; then
+  DIR="$HOME/Library/Application Support/yangzz"
+else
+  DIR="$HOME/.config/yangzz"
+fi
+mkdir -p "$DIR"
+cat > "$DIR/config.toml" << EOF
+provider = "my-relay"
+model = "$MY_MODEL"
+
+[[providers]]
+name = "my-relay"
+api_key = "$MY_KEY"
+base_url = "$MY_URL"
+default_model = "$MY_MODEL"
+api_format = "openai"
+EOF
+echo "✅ 配置已写入: $DIR/config.toml"
+echo "🚀 现在运行 yangzz 即可开始！"
+```
+
+</details>
+
+<details>
+<summary><b>🪟 Windows PowerShell</b>（点击展开）</summary>
+
+```powershell
+# ⚠️ 只需要改这 3 行 ⚠️
+$MY_KEY = "sk-你的key"                       # 中转商给你的 key
+$MY_URL = "https://你的中转地址"              # 中转商给你的地址
+$MY_MODEL = "claude-sonnet-4-20250514"       # 默认模型
+
+# —— 以下不用动 ——
+$dir = "$env:APPDATA\yangzz"
+New-Item -ItemType Directory -Force -Path $dir | Out-Null
+@"
+provider = "my-relay"
+model = "$MY_MODEL"
+
+[[providers]]
+name = "my-relay"
+api_key = "$MY_KEY"
+base_url = "$MY_URL"
+default_model = "$MY_MODEL"
+api_format = "openai"
+"@ | Out-File -Encoding utf8 "$dir\config.toml"
+Write-Host "✅ 配置已写入: $dir\config.toml"
+Write-Host "🚀 现在运行 yangzz 即可开始！"
+```
+
+</details>
+
+> 💡 配完后可以运行 `yangzz --doctor` 检查配置是否正确。
+
+<details>
+<summary>手动配置（不用脚本）</summary>
+
+配置文件位置：
 - **Mac**: `~/Library/Application Support/yangzz/config.toml`
 - **Linux**: `~/.config/yangzz/config.toml`
 - **Windows**: `%APPDATA%\yangzz\config.toml`
@@ -55,6 +123,8 @@ base_url = "https://你的中转地址"        # 中转商给你的地址
 default_model = "claude-sonnet-4-20250514"
 api_format = "openai"                  # 绝大多数中转都是 openai 格式
 ```
+
+</details>
 
 ### 启动
 

@@ -1,6 +1,6 @@
 {
   "name": "yangzz",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "AI coding assistant — any model, one variable, ready to go",
   "bin": {
     "yangzz": "bin/yangzz.js"

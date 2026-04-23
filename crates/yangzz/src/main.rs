@@ -60,6 +60,15 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
+    // Windows: enable ANSI escape codes in cmd.exe / PowerShell
+    #[cfg(target_os = "windows")]
+    {
+        let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::SetTitle("yangzz"));
+        // Enable virtual terminal processing for ANSI color support
+        let _ = crossterm::terminal::enable_raw_mode();
+        let _ = crossterm::terminal::disable_raw_mode();
+    }
+
     let cli = Cli::parse();
 
     // --guide flag: show quick-start guide
@@ -128,9 +137,10 @@ pub fn print_guide() {
     println!("  yangzz 的配置写在自己的文件里，不影响其他工具。");
     println!();
     println!("  {BOLD}配置文件位置：{RESET}");
-    println!("    Mac:   ~/Library/Application Support/yangzz/config.toml");
-    println!("    Linux: ~/.config/yangzz/config.toml");
-    println!("    项目级: .yangzz.toml 或 .yangzz/config.toml");
+    println!("    Mac:     ~/Library/Application Support/yangzz/config.toml");
+    println!("    Linux:   ~/.config/yangzz/config.toml");
+    println!("    Windows: %APPDATA%\\yangzz\\config.toml");
+    println!("    项目级:   .yangzz.toml 或 .yangzz/config.toml");
     println!();
     println!("  {BOLD_GOLD}最常见：用中转站{RESET}");
     println!();
@@ -228,6 +238,8 @@ fn run_setup_wizard() {
     // Detect config path
     let config_path = if cfg!(target_os = "macos") {
         "~/Library/Application Support/yangzz/config.toml".to_string()
+    } else if cfg!(target_os = "windows") {
+        "%APPDATA%\\yangzz\\config.toml".to_string()
     } else {
         "~/.config/yangzz/config.toml".to_string()
     };

@@ -56,11 +56,19 @@ impl Tool for BashTool {
 
         let result = tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs.min(policy.commands.max_runtime_secs)),
-            Command::new("bash")
-                .arg("-c")
-                .arg(&effective_command)
-                .current_dir(&ctx.cwd)
-                .output()
+            if cfg!(target_os = "windows") {
+                Command::new("cmd")
+                    .arg("/C")
+                    .arg(&effective_command)
+                    .current_dir(&ctx.cwd)
+                    .output()
+            } else {
+                Command::new("bash")
+                    .arg("-c")
+                    .arg(&effective_command)
+                    .current_dir(&ctx.cwd)
+                    .output()
+            }
         ).await;
 
         match result {

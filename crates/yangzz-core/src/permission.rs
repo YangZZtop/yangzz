@@ -110,6 +110,16 @@ fn is_safe_bash_command(cmd: &str) -> bool {
         "jq", "yq",
         "node", "python", "python3", "ruby",
         "cargo",
+        // Windows-specific safe commands
+        "type",      // Windows cat
+        "findstr",   // Windows grep
+        "where",     // Windows which
+        "systeminfo",
+        "ver",
+        "set",       // show env vars
+        "path",
+        "chdir",
+        "cd",
     ];
 
     if SAFE_COMMANDS.contains(&first_word) {
@@ -174,6 +184,19 @@ fn is_dangerous_bash_command(cmd: &str) -> bool {
         "kill -9 1",
         "pkill -9",
         "killall",
+        // Windows-specific dangerous commands
+        "del /f /s /q c:\\",
+        "rd /s /q c:\\",
+        "rmdir /s /q c:\\",
+        "del /f /s /q %systemroot%",
+        "format d:",
+        "format e:",
+        "diskpart",
+        "bcdedit",
+        "reg delete",
+        "taskkill /f /im",
+        "net stop",
+        "sc delete",
     ];
     for p in &patterns {
         if lower.contains(p) { return true; }

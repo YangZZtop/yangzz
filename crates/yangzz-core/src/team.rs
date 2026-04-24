@@ -1,7 +1,7 @@
 use crate::config::settings::StrategyConfig;
-use crate::provider::router::{StrategyRouter, TaskDomain};
-use crate::provider::Provider;
 use crate::message::Message;
+use crate::provider::Provider;
+use crate::provider::router::{StrategyRouter, TaskDomain};
 use crate::query;
 use crate::render::Renderer;
 use crate::tool::ToolExecutor;
@@ -121,19 +121,25 @@ impl Team {
         renderer: &mut dyn Renderer,
         max_tokens: u32,
     ) -> anyhow::Result<String> {
-        info!("Team '{}' executing task in {:?} mode", self.name, self.mode);
+        info!(
+            "Team '{}' executing task in {:?} mode",
+            self.name, self.mode
+        );
 
         match self.mode {
             CollaborationMode::Sequential => {
-                self.execute_sequential(task, executor, renderer, max_tokens).await
+                self.execute_sequential(task, executor, renderer, max_tokens)
+                    .await
             }
             CollaborationMode::Parallel => {
                 // Parallel: each member gets the same task, results are merged
-                self.execute_parallel(task, executor, renderer, max_tokens).await
+                self.execute_parallel(task, executor, renderer, max_tokens)
+                    .await
             }
             CollaborationMode::Pair => {
                 // Pair: first two members alternate
-                self.execute_pair(task, executor, renderer, max_tokens).await
+                self.execute_pair(task, executor, renderer, max_tokens)
+                    .await
             }
         }
     }
@@ -160,7 +166,9 @@ impl Team {
         for member in &ordered {
             renderer.render_info(&format!(
                 "🏗 Team member '{}' ({}, {}) working...",
-                member.name, member.provider.name(), member.model
+                member.name,
+                member.provider.name(),
+                member.model
             ));
 
             let system = format!(
@@ -198,7 +206,10 @@ impl Team {
                 })
                 .unwrap_or_default();
 
-            context = format!("{}\n\n--- {}'s output ---\n{}", context, member.name, response_text);
+            context = format!(
+                "{}\n\n--- {}'s output ---\n{}",
+                context, member.name, response_text
+            );
             results.push(format!("[{}] {}", member.name, response_text));
         }
 
@@ -214,7 +225,8 @@ impl Team {
     ) -> anyhow::Result<String> {
         renderer.render_info(&format!(
             "🏗 Team '{}': {} members working...",
-            self.name, self.members.len()
+            self.name,
+            self.members.len()
         ));
 
         // Execute each member's agentic loop in sequence (tool execution needs
@@ -226,7 +238,9 @@ impl Team {
         for member in &self.members {
             renderer.render_info(&format!(
                 "  ● {} ({}, {}) ...",
-                member.name, member.role.as_str(), member.model
+                member.name,
+                member.role.as_str(),
+                member.model
             ));
 
             let system = format!(
@@ -236,8 +250,11 @@ impl Team {
                  Complete YOUR part of the task. Focus on your role. Be thorough.",
                 name = member.name,
                 role = member.role.as_str(),
-                prev = if results.is_empty() { "(you are first)".to_string() }
-                       else { results.join("\n---\n") },
+                prev = if results.is_empty() {
+                    "(you are first)".to_string()
+                } else {
+                    results.join("\n---\n")
+                },
             );
 
             let mut messages = vec![Message::user(&context)];
@@ -267,7 +284,12 @@ impl Team {
                 .unwrap_or_default();
 
             renderer.render_info(&format!("  ✓ {} completed", member.name));
-            results.push(format!("[{} ({})] {}", member.name, member.role.as_str(), response_text));
+            results.push(format!(
+                "[{} ({})] {}",
+                member.name,
+                member.role.as_str(),
+                response_text
+            ));
         }
 
         Ok(results.join("\n\n---\n\n"))
@@ -281,7 +303,9 @@ impl Team {
         max_tokens: u32,
     ) -> anyhow::Result<String> {
         if self.members.len() < 2 {
-            return Err(anyhow::anyhow!("Pair mode requires at least 2 team members"));
+            return Err(anyhow::anyhow!(
+                "Pair mode requires at least 2 team members"
+            ));
         }
 
         // Alternate between first two members for 2 rounds
@@ -292,7 +316,9 @@ impl Team {
             let member = members[round % 2];
             renderer.render_info(&format!(
                 "🏗 Pair round {}: '{}' ({}) working...",
-                round + 1, member.name, member.model
+                round + 1,
+                member.name,
+                member.model
             ));
 
             let system = format!(
@@ -327,7 +353,10 @@ impl Team {
                 })
                 .unwrap_or_default();
 
-            context = format!("{}\n\n--- {}'s turn ---\n{}", context, member.name, response_text);
+            context = format!(
+                "{}\n\n--- {}'s turn ---\n{}",
+                context, member.name, response_text
+            );
         }
 
         Ok(context)
@@ -386,7 +415,9 @@ pub fn build_team_from_strategy(
             }
             added.insert(key);
 
-            if let Some((name, provider, model)) = providers.iter().find(|(n, _, _)| n == &provider_name) {
+            if let Some((name, provider, model)) =
+                providers.iter().find(|(n, _, _)| n == &provider_name)
+            {
                 team.add_member(TeamMember {
                     name: format!("{}-{}", name, domain.as_str()),
                     provider: provider.clone(),
@@ -409,9 +440,13 @@ pub fn build_team_from_strategy(
         }
     }
 
-    info!("Built strategy team with {} members: {:?}",
+    info!(
+        "Built strategy team with {} members: {:?}",
         team.members.len(),
-        team.members.iter().map(|m| format!("{}({})", m.name, m.model)).collect::<Vec<_>>()
+        team.members
+            .iter()
+            .map(|m| format!("{}({})", m.name, m.model))
+            .collect::<Vec<_>>()
     );
 
     team
@@ -434,13 +469,16 @@ pub async fn execute_with_strategy(
     if tasks.len() == 1 {
         // Single domain — just route to the right provider
         let (domain, task_text) = &tasks[0];
-        let provider_name = router.provider_for_domain(*domain)
-            .unwrap_or_default();
+        let provider_name = router.provider_for_domain(*domain).unwrap_or_default();
 
         renderer.render_info(&format!(
             "📍 Strategy: {} → {}",
             domain.as_str(),
-            if provider_name.is_empty() { "(default)" } else { &provider_name }
+            if provider_name.is_empty() {
+                "(default)"
+            } else {
+                &provider_name
+            }
         ));
 
         if let Some((_, provider, model)) = providers.iter().find(|(n, _, _)| n == &provider_name) {
@@ -453,19 +491,30 @@ pub async fn execute_with_strategy(
                 None,
                 executor,
                 renderer,
-            ).await?;
+            )
+            .await?;
 
-            let response = messages.iter().rev().find_map(|m| {
-                m.content.iter().find_map(|b| {
-                    if let crate::message::ContentBlock::Text { text } = b {
-                        Some(text.clone())
-                    } else { None }
+            let response = messages
+                .iter()
+                .rev()
+                .find_map(|m| {
+                    m.content.iter().find_map(|b| {
+                        if let crate::message::ContentBlock::Text { text } = b {
+                            Some(text.clone())
+                        } else {
+                            None
+                        }
+                    })
                 })
-            }).unwrap_or_default();
+                .unwrap_or_default();
 
             Ok(response)
         } else {
-            Err(anyhow::anyhow!("Provider '{}' not found for domain '{}'", provider_name, domain.as_str()))
+            Err(anyhow::anyhow!(
+                "Provider '{}' not found for domain '{}'",
+                provider_name,
+                domain.as_str()
+            ))
         }
     } else {
         // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -481,7 +530,8 @@ pub async fn execute_with_strategy(
         }
 
         // Pick the planner provider (or first available)
-        let planner = providers.first()
+        let planner = providers
+            .first()
             .ok_or_else(|| anyhow::anyhow!("No providers available"))?;
 
         // ── Phase 1: PLAN — generate shared contract ──
@@ -500,20 +550,34 @@ pub async fn execute_with_strategy(
              Output the contract in a clear, structured format. \
              This contract will be given to every agent as their specification.\n\
              Be specific — use exact names, types, and paths. No ambiguity.",
-            agents = tasks.iter()
-                .map(|(d, _)| format!("  - {}: {}", d.as_str(),
-                    router.provider_for_domain(*d).unwrap_or_default()))
-                .collect::<Vec<_>>().join("\n")
+            agents = tasks
+                .iter()
+                .map(|(d, _)| format!(
+                    "  - {}: {}",
+                    d.as_str(),
+                    router.provider_for_domain(*d).unwrap_or_default()
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
         );
 
         let mut plan_messages = vec![Message::user(&plan_prompt)];
         let _plan_usage = query::run_agentic_loop(
-            &planner.1, &planner.2, max_tokens,
-            &mut plan_messages, None, executor, renderer,
-        ).await?;
+            &planner.1,
+            &planner.2,
+            max_tokens,
+            &mut plan_messages,
+            None,
+            executor,
+            renderer,
+        )
+        .await?;
 
         let contract = extract_last_text(&plan_messages);
-        renderer.render_info(&format!("  ✓ Contract generated ({} chars)", contract.len()));
+        renderer.render_info(&format!(
+            "  ✓ Contract generated ({} chars)",
+            contract.len()
+        ));
 
         // ── Phase 2: EXECUTE — each agent works with the contract ──
         renderer.render_info("━━ Phase 2/3: Executing with shared contract...");
@@ -521,26 +585,22 @@ pub async fn execute_with_strategy(
         let mut all_results = Vec::new();
 
         for (domain, task_text) in &tasks {
-            let provider_name = router.provider_for_domain(*domain)
-                .unwrap_or_default();
+            let provider_name = router.provider_for_domain(*domain).unwrap_or_default();
 
-            let (_, provider, model) = match providers.iter()
-                .find(|(n, _, _)| n == &provider_name)
+            let (_, provider, model) = match providers.iter().find(|(n, _, _)| n == &provider_name)
             {
                 Some(p) => p,
                 None => {
                     renderer.render_info(&format!(
                         "  ⚠ Skipping {}: provider '{}' not found",
-                        domain.as_str(), provider_name
+                        domain.as_str(),
+                        provider_name
                     ));
                     continue;
                 }
             };
 
-            renderer.render_info(&format!(
-                "  ● {} ({}) working...",
-                domain.as_str(), model
-            ));
+            renderer.render_info(&format!("  ● {} ({}) working...", domain.as_str(), model));
 
             let exec_prompt = format!(
                 "You are working as the **{}** agent in a multi-agent team.\n\n\
@@ -557,9 +617,15 @@ pub async fn execute_with_strategy(
 
             let mut exec_messages = vec![Message::user(&exec_prompt)];
             let _exec_usage = query::run_agentic_loop(
-                provider, model, max_tokens,
-                &mut exec_messages, None, executor, renderer,
-            ).await?;
+                provider,
+                model,
+                max_tokens,
+                &mut exec_messages,
+                None,
+                executor,
+                renderer,
+            )
+            .await?;
 
             let result = extract_last_text(&exec_messages);
             renderer.render_info(&format!("  ✓ {} completed", domain.as_str()));
@@ -589,9 +655,15 @@ pub async fn execute_with_strategy(
 
         let mut verify_messages = vec![Message::user(&verify_prompt)];
         let _verify_usage = query::run_agentic_loop(
-            &planner.1, &planner.2, max_tokens,
-            &mut verify_messages, None, executor, renderer,
-        ).await?;
+            &planner.1,
+            &planner.2,
+            max_tokens,
+            &mut verify_messages,
+            None,
+            executor,
+            renderer,
+        )
+        .await?;
 
         let verification = extract_last_text(&verify_messages);
         renderer.render_info("  ✓ Verification complete");
@@ -603,11 +675,17 @@ pub async fn execute_with_strategy(
 
 /// Extract the last text content from messages
 fn extract_last_text(messages: &[Message]) -> String {
-    messages.iter().rev().find_map(|m| {
-        m.content.iter().find_map(|b| {
-            if let crate::message::ContentBlock::Text { text } = b {
-                Some(text.clone())
-            } else { None }
+    messages
+        .iter()
+        .rev()
+        .find_map(|m| {
+            m.content.iter().find_map(|b| {
+                if let crate::message::ContentBlock::Text { text } = b {
+                    Some(text.clone())
+                } else {
+                    None
+                }
+            })
         })
-    }).unwrap_or_default()
+        .unwrap_or_default()
 }

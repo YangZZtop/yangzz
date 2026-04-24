@@ -4,7 +4,7 @@
 //! Discovers tools from MCP servers and makes them available to the agentic loop.
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
@@ -12,8 +12,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
 
-/// MCP server configuration from .yangzz/mcp.json
-#[derive(Debug, Deserialize, Clone)]
+/// MCP server configuration from mcp.json
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct McpServerConfig {
     pub name: String,
     pub command: String,
@@ -81,7 +81,8 @@ impl McpConnection {
             cmd.env(k, v);
         }
 
-        let child = cmd.spawn()
+        let child = cmd
+            .spawn()
             .map_err(|e| anyhow::anyhow!("Failed to start MCP server '{}': {e}", config.name))?;
 
         let mut conn = Self {
@@ -98,19 +99,25 @@ impl McpConnection {
 
     /// Send JSON-RPC initialize request
     async fn initialize(&mut self) -> anyhow::Result<()> {
-        let resp = self.send_request("initialize", Some(json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {
-                "name": "yangzz",
-                "version": env!("CARGO_PKG_VERSION")
-            }
-        }))).await?;
+        let resp = self
+            .send_request(
+                "initialize",
+                Some(json!({
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "clientInfo": {
+                        "name": "yangzz",
+                        "version": env!("CARGO_PKG_VERSION")
+                    }
+                })),
+            )
+            .await?;
 
         info!("MCP server '{}' initialized: {:?}", self.config.name, resp);
 
         // Send initialized notification
-        self.send_notification("notifications/initialized", None).await?;
+        self.send_notification("notifications/initialized", None)
+            .await?;
 
         Ok(())
     }
@@ -119,7 +126,8 @@ impl McpConnection {
     pub async fn list_tools(&mut self) -> anyhow::Result<Vec<McpTool>> {
         let resp = self.send_request("tools/list", None).await?;
 
-        let tools_array = resp.as_object()
+        let tools_array = resp
+            .as_object()
             .and_then(|o| o.get("tools"))
             .and_then(|t| t.as_array())
             .cloned()
@@ -128,7 +136,10 @@ impl McpConnection {
         let mut tools = Vec::new();
         for tool_val in tools_array {
             let name = tool_val["name"].as_str().unwrap_or_default().to_string();
-            let description = tool_val["description"].as_str().unwrap_or_default().to_string();
+            let description = tool_val["description"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
             let input_schema = tool_val["inputSchema"].clone();
 
             tools.push(McpTool {
@@ -139,19 +150,29 @@ impl McpConnection {
             });
         }
 
-        info!("MCP server '{}': {} tools discovered", self.config.name, tools.len());
+        info!(
+            "MCP server '{}': {} tools discovered",
+            self.config.name,
+            tools.len()
+        );
         Ok(tools)
     }
 
     /// Call a tool on the MCP server
     pub async fn call_tool(&mut self, name: &str, arguments: &Value) -> anyhow::Result<String> {
-        let resp = self.send_request("tools/call", Some(json!({
-            "name": name,
-            "arguments": arguments,
-        }))).await?;
+        let resp = self
+            .send_request(
+                "tools/call",
+                Some(json!({
+                    "name": name,
+                    "arguments": arguments,
+                })),
+            )
+            .await?;
 
         // Extract content from response
-        let content = resp.as_object()
+        let content = resp
+            .as_object()
             .and_then(|o| o.get("content"))
             .and_then(|c| c.as_array())
             .map(|arr| {
@@ -180,13 +201,19 @@ impl McpConnection {
         let mut request_line = serde_json::to_string(&request)?;
         request_line.push('\n');
 
-        let stdin = self.child.stdin.as_mut()
+        let stdin = self
+            .child
+            .stdin
+            .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MCP server stdin closed"))?;
         stdin.write_all(request_line.as_bytes()).await?;
         stdin.flush().await?;
 
         // Read response line
-        let stdout = self.child.stdout.as_mut()
+        let stdout = self
+            .child
+            .stdout
+            .as_mut()
             .ok_or_else(|| anyhow::anyhow!("MCP server stdout closed"))?;
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
@@ -202,7 +229,11 @@ impl McpConnection {
     }
 
     /// Send a JSON-RPC notification (no response expected)
-    async fn send_notification(&mut self, method: &str, params: Option<Value>) -> anyhow::Result<()> {
+    async fn send_notification(
+        &mut self,
+        method: &str,
+        params: Option<Value>,
+    ) -> anyhow::Result<()> {
         let notification = json!({
             "jsonrpc": "2.0",
             "method": method,
@@ -228,32 +259,69 @@ impl Drop for McpConnection {
     }
 }
 
-/// Load MCP server configs from .yangzz/mcp.json
+/// Load MCP server configs — merge global (~/.yangzz/mcp.json) + project (.yangzz/mcp.json).
+/// Project overrides global on name collision.
 pub fn load_mcp_configs(cwd: &Path) -> Vec<McpServerConfig> {
-    let config_path = cwd.join(".yangzz").join("mcp.json");
-    if !config_path.exists() {
-        return Vec::new();
+    let mut merged: Vec<McpServerConfig> = Vec::new();
+
+    // Global first
+    for cfg in load_mcp_configs_at(&crate::paths::yangzz_dir().join("mcp.json")) {
+        merged.push(cfg);
     }
 
-    match std::fs::read_to_string(&config_path) {
-        Ok(content) => {
-            match serde_json::from_str::<McpConfigFile>(&content) {
-                Ok(config) => config.servers,
-                Err(e) => {
-                    warn!("Failed to parse mcp.json: {e}");
-                    Vec::new()
-                }
+    // Project-local: override by name
+    for cfg in load_mcp_configs_at(&cwd.join(".yangzz").join("mcp.json")) {
+        merged.retain(|c| !c.name.eq_ignore_ascii_case(&cfg.name));
+        merged.push(cfg);
+    }
+
+    merged
+}
+
+/// Load MCP configs from a specific path. Returns empty if file missing.
+pub fn load_mcp_configs_at(path: &Path) -> Vec<McpServerConfig> {
+    if !path.exists() {
+        return Vec::new();
+    }
+    match std::fs::read_to_string(path) {
+        Ok(content) => match serde_json::from_str::<McpConfigFile>(&content) {
+            Ok(config) => config.servers,
+            Err(e) => {
+                warn!("Failed to parse {}: {e}", path.display());
+                Vec::new()
             }
-        }
+        },
         Err(e) => {
-            warn!("Failed to read mcp.json: {e}");
+            warn!("Failed to read {}: {e}", path.display());
             Vec::new()
         }
     }
 }
 
+/// Path to the global MCP config file: `~/.yangzz/mcp.json`.
+pub fn global_mcp_path() -> std::path::PathBuf {
+    crate::paths::yangzz_dir().join("mcp.json")
+}
+
+/// Save MCP configs to the global `~/.yangzz/mcp.json`.
+pub fn save_global_mcp_configs(configs: &[McpServerConfig]) -> Result<std::path::PathBuf, String> {
+    crate::paths::ensure_yangzz_dir();
+    let path = global_mcp_path();
+    let file = McpConfigFileOwned {
+        servers: configs.to_vec(),
+    };
+    let json = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    std::fs::write(&path, json).map_err(|e| e.to_string())?;
+    Ok(path)
+}
+
 #[derive(Deserialize)]
 struct McpConfigFile {
+    servers: Vec<McpServerConfig>,
+}
+
+#[derive(Serialize)]
+struct McpConfigFileOwned {
     servers: Vec<McpServerConfig>,
 }
 
@@ -289,20 +357,27 @@ impl McpManager {
             }
         }
 
-        info!("MCP initialized: {} servers, {} tools", connections.len(), tools.len());
+        info!(
+            "MCP initialized: {} servers, {} tools",
+            connections.len(),
+            tools.len()
+        );
 
         Self { connections, tools }
     }
 
     /// Get all discovered MCP tools (for tool definitions)
     pub fn tool_definitions(&self) -> Vec<Value> {
-        self.tools.iter().map(|t| {
-            json!({
-                "name": format!("mcp_{}", t.name),
-                "description": format!("[MCP:{}] {}", t.server_name, t.description),
-                "input_schema": t.input_schema,
+        self.tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "name": format!("mcp_{}", t.name),
+                    "description": format!("[MCP:{}] {}", t.server_name, t.description),
+                    "input_schema": t.input_schema,
+                })
             })
-        }).collect()
+            .collect()
     }
 
     /// Call an MCP tool by prefixed name
@@ -310,13 +385,17 @@ impl McpManager {
         let tool_name = name.strip_prefix("mcp_").unwrap_or(name);
 
         // Find which server has this tool
-        let server_name = self.tools.iter()
+        let server_name = self
+            .tools
+            .iter()
             .find(|t| t.name == tool_name)
             .map(|t| t.server_name.clone())
             .ok_or_else(|| anyhow::anyhow!("MCP tool not found: {tool_name}"))?;
 
         // Find the connection
-        let conn = self.connections.iter_mut()
+        let conn = self
+            .connections
+            .iter_mut()
             .find(|c| c.config.name == server_name)
             .ok_or_else(|| anyhow::anyhow!("MCP server not connected: {server_name}"))?;
 

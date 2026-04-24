@@ -33,12 +33,9 @@ impl Session {
         }
     }
 
-    /// Session storage directory
+    /// Session storage directory: `~/.yangzz/sessions/`
     fn storage_dir() -> PathBuf {
-        let dir = dirs::data_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("yangzz")
-            .join("sessions");
+        let dir = crate::paths::sessions_dir();
         let _ = std::fs::create_dir_all(&dir);
         dir
     }
@@ -111,10 +108,18 @@ impl Session {
                         _ => continue,
                     };
                     if text.to_lowercase().contains(&lower_query) {
-                        // Extract a snippet around the match
+                        // Extract a snippet around the match — all indices
+                        // floored/ceiled to char boundaries so CJK/emoji
+                        // don't cause UTF-8 slice panics.
                         let idx = text.to_lowercase().find(&lower_query).unwrap_or(0);
-                        let start = idx.saturating_sub(60);
-                        let end = (idx + query.len() + 60).min(text.len());
+                        let mut start = idx.saturating_sub(60);
+                        while start > 0 && !text.is_char_boundary(start) {
+                            start -= 1;
+                        }
+                        let mut end = (idx + query.len() + 60).min(text.len());
+                        while end < text.len() && !text.is_char_boundary(end) {
+                            end += 1;
+                        }
                         let snippet = &text[start..end];
 
                         results.push(SearchResult {

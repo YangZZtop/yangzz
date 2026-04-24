@@ -29,7 +29,8 @@ pub fn builtin_skills() -> Vec<Skill> {
 4. **Security**: Injection, auth bypass, data exposure
 5. **Maintainability**: Complexity, coupling, missing tests
 
-Be specific. Reference line numbers. Suggest fixes."#.into(),
+Be specific. Reference line numbers. Suggest fixes."#
+                .into(),
         },
         Skill {
             name: "debug".into(),
@@ -43,19 +44,26 @@ Be specific. Reference line numbers. Suggest fixes."#.into(),
 5. **Fix**: Implement the minimal fix for the root cause
 6. **Verify**: Confirm the fix resolves the issue
 
-Do NOT guess. Use file_read and grep to gather evidence first."#.into(),
+Do NOT guess. Use file_read and grep to gather evidence first."#
+                .into(),
         },
         Skill {
             name: "explain".into(),
             description: "Explain — understand code or concepts in depth".into(),
-            triggers: vec!["explain".into(), "what does".into(), "how does".into(), "/explain".into()],
+            triggers: vec![
+                "explain".into(),
+                "what does".into(),
+                "how does".into(),
+                "/explain".into(),
+            ],
             body: r#"Explain the code or concept clearly:
 1. **What it does** — one sentence summary
 2. **How it works** — step by step walkthrough
 3. **Why it's designed this way** — trade-offs and alternatives
 4. **Key details** — edge cases, gotchas, performance characteristics
 
-Read the relevant code first before explaining."#.into(),
+Read the relevant code first before explaining."#
+                .into(),
         },
     ]
 }

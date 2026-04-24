@@ -8,8 +8,26 @@ const os = require("os");
 const PACKAGE_VERSION = require("./package.json").version;
 const BIN_DIR = path.join(__dirname, "bin");
 const IS_WIN = os.platform() === "win32";
+const IS_MAC = os.platform() === "darwin";
 const EXT = IS_WIN ? ".exe" : "";
 const BIN_PATH = path.join(BIN_DIR, `yangzz${EXT}`);
+
+// macOS Sequoia (15+) silently blocks unsigned arm64 binaries — they hang with
+// no error. Ad-hoc signing fixes it locally without needing an Apple Developer
+// account. Safe to run on already-signed binaries too (replaces signature).
+function adhocCodesignMac(binPath) {
+  if (!IS_MAC) return;
+  try {
+    execSync(`codesign --force --sign - "${binPath}"`, {
+      stdio: "ignore",
+      timeout: 10000,
+    });
+  } catch {
+    // codesign unavailable or failed — not fatal; CI-built binaries should
+    // already be signed. Local cargo builds may hang on Sequoia; user can
+    // manually run: codesign --force --sign - <path>
+  }
+}
 
 // Platform mapping for GitHub releases
 const PLATFORM_MAP = {
@@ -108,6 +126,7 @@ function tryDownload(target) {
   // Method 1: Node.js temp script (works on ALL platforms, no shell quoting issues)
   if (downloadWithTempScript(url, BIN_PATH) && isValidBinary(BIN_PATH)) {
     if (!IS_WIN) fs.chmodSync(BIN_PATH, 0o755);
+    adhocCodesignMac(BIN_PATH);
     console.log(`  Binary validated: ${(fs.statSync(BIN_PATH).size / 1024 / 1024).toFixed(1)} MB`);
     return true;
   }
@@ -119,6 +138,7 @@ function tryDownload(target) {
     execSync(`${curlBin} -fsSL -o "${BIN_PATH}" "${url}"`, { stdio: "inherit", timeout: 120000 });
     if (isValidBinary(BIN_PATH)) {
       if (!IS_WIN) fs.chmodSync(BIN_PATH, 0o755);
+      adhocCodesignMac(BIN_PATH);
       console.log(`  Binary validated (curl): ${(fs.statSync(BIN_PATH).size / 1024 / 1024).toFixed(1)} MB`);
       return true;
     }
@@ -190,7 +210,11 @@ function tryCargoBuild() {
       cwd: __dirname,
     });
     // cargo install puts binary in ./bin/yangzz
-    return fs.existsSync(BIN_PATH) && fs.statSync(BIN_PATH).size > 1000;
+    if (fs.existsSync(BIN_PATH) && fs.statSync(BIN_PATH).size > 1000) {
+      adhocCodesignMac(BIN_PATH);
+      return true;
+    }
+    return false;
   } catch {
     return false;
   }

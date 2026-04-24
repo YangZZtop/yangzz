@@ -12,19 +12,24 @@ const MAX_MEMORY_BYTES: usize = 32 * 1024; // 32KB max
 /// Memory budget level
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MemoryLevel {
-    L0Full,      // Full MEMORY.md (< 50% context used)
-    L1Summary,   // Summarized entries (50-80%)
-    L2Keywords,  // Keywords only (80-95%)
-    L3None,      // No memory injected (> 95%)
+    L0Full,     // Full MEMORY.md (< 50% context used)
+    L1Summary,  // Summarized entries (50-80%)
+    L2Keywords, // Keywords only (80-95%)
+    L3None,     // No memory injected (> 95%)
 }
 
 impl MemoryLevel {
     /// Determine memory level from context usage ratio (0.0 - 1.0)
     pub fn from_usage(ratio: f64) -> Self {
-        if ratio < 0.50 { MemoryLevel::L0Full }
-        else if ratio < 0.80 { MemoryLevel::L1Summary }
-        else if ratio < 0.95 { MemoryLevel::L2Keywords }
-        else { MemoryLevel::L3None }
+        if ratio < 0.50 {
+            MemoryLevel::L0Full
+        } else if ratio < 0.80 {
+            MemoryLevel::L1Summary
+        } else if ratio < 0.95 {
+            MemoryLevel::L2Keywords
+        } else {
+            MemoryLevel::L3None
+        }
     }
 
     pub fn label(&self) -> &'static str {
@@ -84,12 +89,9 @@ pub fn append_memory(cwd: &Path, entry: &str) -> Result<(), String> {
     std::fs::write(&path, content).map_err(|e| format!("Cannot write MEMORY.md: {e}"))
 }
 
-/// Global memory path
+/// Global memory path: `~/.yangzz/MEMORY.md`
 fn global_memory_path() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("yangzz")
-        .join(MEMORY_FILE)
+    crate::paths::memory_path()
 }
 
 /// Inject memory into system prompt with budget-aware level degradation
@@ -123,7 +125,11 @@ pub fn inject_memory_at_level(system: &str, cwd: &Path, level: MemoryLevel) -> S
                 .lines()
                 .filter(|l| l.starts_with("- ") || l.starts_with("# "))
                 .map(|l| {
-                    if l.len() > 80 { format!("{}..", &l[..80]) } else { l.to_string() }
+                    if l.len() > 80 {
+                        format!("{}..", &l[..80])
+                    } else {
+                        l.to_string()
+                    }
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
@@ -159,7 +165,9 @@ pub fn hermes_analyze(user_input: &str, assistant_output: &str, cwd: &Path) {
     let mut observations = Vec::new();
 
     // Detect language preference
-    let has_cjk = user_input.chars().any(|c| c >= '\u{4E00}' && c <= '\u{9FFF}');
+    let has_cjk = user_input
+        .chars()
+        .any(|c| c >= '\u{4E00}' && c <= '\u{9FFF}');
     if has_cjk {
         observations.push("User prefers Chinese responses");
     }
@@ -169,8 +177,14 @@ pub fn hermes_analyze(user_input: &str, assistant_output: &str, cwd: &Path) {
         ("不要加注释", "User prefers code without comments"),
         ("用中文", "User wants Chinese language responses"),
         ("不要解释", "User prefers direct action over explanations"),
-        ("一次性做完", "User wants complete implementations, not incremental"),
-        ("don't explain", "User prefers direct action over explanations"),
+        (
+            "一次性做完",
+            "User wants complete implementations, not incremental",
+        ),
+        (
+            "don't explain",
+            "User prefers direct action over explanations",
+        ),
         ("no comments", "User prefers code without comments"),
     ];
     for (pattern, observation) in &corrections {
@@ -211,9 +225,9 @@ pub fn hermes_analyze(user_input: &str, assistant_output: &str, cwd: &Path) {
 #[derive(Debug, Clone)]
 pub enum MemoryKind {
     Preference,
-    Scar,      // lesson / bug / pitfall
+    Scar, // lesson / bug / pitfall
     Fact,
-    Pattern,   // success pattern
+    Pattern, // success pattern
 }
 
 impl MemoryKind {
@@ -239,9 +253,23 @@ const CAPTURE_RULES: &[CaptureRule] = &[
         kind: MemoryKind::Preference,
         role: "user",
         patterns: &[
-            "记住", "以后", "不要再", "别再", "我喜欢", "我不喜欢",
-            "我习惯", "我偏好", "我一般", "请一直", "每次都",
-            "remember", "always", "never", "i prefer", "i like", "i don't like",
+            "记住",
+            "以后",
+            "不要再",
+            "别再",
+            "我喜欢",
+            "我不喜欢",
+            "我习惯",
+            "我偏好",
+            "我一般",
+            "请一直",
+            "每次都",
+            "remember",
+            "always",
+            "never",
+            "i prefer",
+            "i like",
+            "i don't like",
         ],
     },
     // Scars — assistant turn (bugs, errors, lessons)
@@ -249,9 +277,19 @@ const CAPTURE_RULES: &[CaptureRule] = &[
         kind: MemoryKind::Scar,
         role: "assistant",
         patterns: &[
-            "出错了", "报错", "失败", "回滚", "bug", "踩坑",
-            "错误原因", "root cause", "stack trace", "修复了",
-            "the issue was", "the bug was", "fixed by",
+            "出错了",
+            "报错",
+            "失败",
+            "回滚",
+            "bug",
+            "踩坑",
+            "错误原因",
+            "root cause",
+            "stack trace",
+            "修复了",
+            "the issue was",
+            "the bug was",
+            "fixed by",
         ],
     },
     // Facts — both turns
@@ -259,9 +297,17 @@ const CAPTURE_RULES: &[CaptureRule] = &[
         kind: MemoryKind::Fact,
         role: "both",
         patterns: &[
-            "项目使用", "依赖", "版本", "端口", "环境变量",
-            "api key", "registry", "数据库", "architecture",
-            "tech stack", "framework",
+            "项目使用",
+            "依赖",
+            "版本",
+            "端口",
+            "环境变量",
+            "api key",
+            "registry",
+            "数据库",
+            "architecture",
+            "tech stack",
+            "framework",
         ],
     },
     // Success patterns — assistant turn
@@ -269,9 +315,16 @@ const CAPTURE_RULES: &[CaptureRule] = &[
         kind: MemoryKind::Pattern,
         role: "assistant",
         patterns: &[
-            "发版成功", "部署成功", "测试通过", "全部通过",
-            "publish success", "tests pass", "all checks passed",
-            "deploy success", "✅", "✔",
+            "发版成功",
+            "部署成功",
+            "测试通过",
+            "全部通过",
+            "publish success",
+            "tests pass",
+            "all checks passed",
+            "deploy success",
+            "✅",
+            "✔",
         ],
     },
 ];
@@ -295,7 +348,13 @@ pub fn auto_capture(user_input: &str, assistant_output: &str, cwd: &Path) {
                 let source = match rule.role {
                     "user" => user_input,
                     "assistant" => assistant_output,
-                    _ => if u_lower.contains(pattern) { user_input } else { assistant_output },
+                    _ => {
+                        if u_lower.contains(pattern) {
+                            user_input
+                        } else {
+                            assistant_output
+                        }
+                    }
                 };
 
                 if let Some(snippet) = extract_snippet(source, pattern, 120) {
@@ -308,44 +367,130 @@ pub fn auto_capture(user_input: &str, assistant_output: &str, cwd: &Path) {
     }
 }
 
-/// Extract a meaningful snippet around a pattern match
+/// Extract a meaningful snippet around a pattern match.
+///
+/// All slicing is done on char boundaries (never raw byte indices) so this
+/// works correctly with CJK/emoji/full-width punctuation.
 fn extract_snippet(text: &str, pattern: &str, max_len: usize) -> Option<String> {
+    // Find pattern position by scanning char-by-char on the original string
+    // rather than byte-searching the lowercased copy (lower-case can change
+    // byte length for some Unicode chars, breaking byte-index math).
     let lower = text.to_lowercase();
-    let pos = lower.find(pattern)?;
+    let byte_pos = lower.find(pattern)?;
+    // Map back to a char boundary in the *original* text. to_lowercase()
+    // preserves char count for our patterns (all ASCII), but just in case,
+    // floor down to the nearest valid char boundary.
+    let pos = floor_char_boundary(text, byte_pos);
 
-    // Take the sentence containing the pattern
-    let start = text[..pos].rfind(|c: char| c == '。' || c == '.' || c == '\n')
-        .map(|p| p + 1)
-        .unwrap_or(pos.saturating_sub(40));
-    let end = text[pos..].find(|c: char| c == '。' || c == '.' || c == '\n')
-        .map(|p| pos + p + 1)
-        .unwrap_or((pos + 80).min(text.len()));
+    // Walk backwards from `pos` to find the previous sentence delimiter,
+    // or take up to 40 characters (not bytes) of context before it.
+    let start = text[..pos]
+        .rfind(|c: char| c == '。' || c == '.' || c == '\n')
+        .map(|p| {
+            // Step past the actual delimiter char (1 byte for ASCII,
+            // 3 bytes for 。). char at p is guaranteed by rfind.
+            let delim_len = text[p..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+            p + delim_len
+        })
+        .unwrap_or_else(|| {
+            // fallback: 40 chars of left context
+            let take = text[..pos].chars().rev().take(40).count();
+            text[..pos]
+                .char_indices()
+                .rev()
+                .nth(take.saturating_sub(1))
+                .map(|(i, _)| i)
+                .unwrap_or(0)
+        });
+    let start = floor_char_boundary(text, start);
+
+    // Walk forwards from `pos` for a sentence delimiter, or take up to 80
+    // chars of right context.
+    let end = text[pos..]
+        .find(|c: char| c == '。' || c == '.' || c == '\n')
+        .map(|p| {
+            pos + p
+                + text[pos + p..]
+                    .chars()
+                    .next()
+                    .map(|c| c.len_utf8())
+                    .unwrap_or(1)
+        })
+        .unwrap_or_else(|| {
+            let mut end = pos;
+            for (i, c) in text[pos..].char_indices().take(80) {
+                end = pos + i + c.len_utf8();
+            }
+            end
+        });
+    let end = ceil_char_boundary(text, end.min(text.len()));
 
     let snippet = text[start..end].trim();
-    if snippet.is_empty() || snippet.len() < 5 {
+    if snippet.chars().count() < 5 {
         return None;
     }
-    if snippet.len() > max_len {
-        Some(format!("{}..", &snippet[..max_len]))
+
+    // Truncate by *char* count, not bytes.
+    if snippet.chars().count() > max_len {
+        let truncated: String = snippet.chars().take(max_len).collect();
+        Some(format!("{truncated}.."))
     } else {
         Some(snippet.to_string())
     }
+}
+
+/// Round `i` down to the nearest char boundary at or before it.
+fn floor_char_boundary(s: &str, mut i: usize) -> usize {
+    if i >= s.len() {
+        return s.len();
+    }
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Round `i` up to the nearest char boundary at or after it.
+fn ceil_char_boundary(s: &str, mut i: usize) -> usize {
+    let len = s.len();
+    if i >= len {
+        return len;
+    }
+    while i < len && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
 }
 
 /// Detect frustration patterns and return strategy hint
 pub fn detect_frustration(user_input: &str) -> Option<&'static str> {
     let lower = user_input.to_lowercase();
     let frustration_signals = [
-        "不是这样", "错了", "不对", "重来", "再试", "为什么又",
-        "都说了", "你没听", "搞什么", "不行", "废话",
-        "wrong", "no!", "redo", "try again", "not what i asked",
-        "that's wrong", "you broke", "fix this",
+        "不是这样",
+        "错了",
+        "不对",
+        "重来",
+        "再试",
+        "为什么又",
+        "都说了",
+        "你没听",
+        "搞什么",
+        "不行",
+        "废话",
+        "wrong",
+        "no!",
+        "redo",
+        "try again",
+        "not what i asked",
+        "that's wrong",
+        "you broke",
+        "fix this",
     ];
 
     for signal in &frustration_signals {
         if lower.contains(signal) {
             return Some(
-                "[STRATEGY SHIFT: The user seems frustrated. Be more careful, ask for clarification before acting, and double-check your work. Show your reasoning step by step.]"
+                "[STRATEGY SHIFT: The user seems frustrated. Be more careful, ask for clarification before acting, and double-check your work. Show your reasoning step by step.]",
             );
         }
     }

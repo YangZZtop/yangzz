@@ -25,5 +25,5 @@ dialoguer = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
 rustyline = { workspace = true }
-ratatui = { workspace = true }
+ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
 unicode-width = "0.2"

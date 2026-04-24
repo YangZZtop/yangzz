@@ -1,5 +1,7 @@
 use crate::message::{ContentBlock, Message, Role, Usage};
-use crate::provider::{CreateMessageRequest, CreateMessageResponse, Provider, ProviderError, StopReason, StreamEvent};
+use crate::provider::{
+    CreateMessageRequest, CreateMessageResponse, Provider, ProviderError, StopReason, StreamEvent,
+};
 use crate::render::Renderer;
 use crate::tool::ToolExecutor;
 use std::sync::Arc;
@@ -28,9 +30,7 @@ async fn send_with_retry(
 
         let provider = Arc::clone(provider);
         let req = request.clone();
-        let handle = tokio::spawn(async move {
-            provider.create_message_stream(&req, tx).await
-        });
+        let handle = tokio::spawn(async move { provider.create_message_stream(&req, tx).await });
 
         // Race: stream events vs Ctrl+C
         let mut cancelled = false;
@@ -58,7 +58,10 @@ async fn send_with_retry(
             Ok(Ok(response)) => return Ok(response),
             Ok(Err(e)) if attempt < MAX_RETRIES - 1 && is_retryable(&e) => {
                 let delay = (attempt + 1) as u64 * 2;
-                warn!("Request failed (attempt {}), retrying in {delay}s: {e}", attempt + 1);
+                warn!(
+                    "Request failed (attempt {}), retrying in {delay}s: {e}",
+                    attempt + 1
+                );
                 renderer.render_info(&format!("Connection error, retrying in {delay}s..."));
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
             }
@@ -102,7 +105,10 @@ pub async fn run_agentic_loop(
     renderer: &mut dyn Renderer,
 ) -> anyhow::Result<Usage> {
     let tool_defs = executor.tool_definitions();
-    let mut total_usage = Usage { input_tokens: 0, output_tokens: 0 };
+    let mut total_usage = Usage {
+        input_tokens: 0,
+        output_tokens: 0,
+    };
     let context_window = crate::config::model_meta::lookup_model(model)
         .map(|m| m.context_window as usize)
         .unwrap_or(DEFAULT_CONTEXT_WINDOW);
@@ -185,12 +191,24 @@ pub async fn run_agentic_loop(
         // If no tool calls, we're done — but check for premature completion claims
         if response.stop_reason != StopReason::ToolUse {
             // Completion guard: detect "I'm done" claims without evidence of actual work
-            let assistant_text = response.message.content.iter()
-                .filter_map(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
-                .collect::<Vec<_>>().join(" ");
+            let assistant_text = response
+                .message
+                .content
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::Text { text } = b {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
 
             if turn > 0 && completion_guard_triggered(&assistant_text, messages) {
-                renderer.render_info("⚠ Completion claim detected without file changes. Asking model to verify...");
+                renderer.render_info(
+                    "⚠ Completion claim detected without file changes. Asking model to verify...",
+                );
                 // Inject a nudge to actually do the work
                 messages.push(Message {
                     role: Role::User,
@@ -203,10 +221,18 @@ pub async fn run_agentic_loop(
 
             // Hermes: analyze interaction to learn preferences
             let cwd = std::env::current_dir().unwrap_or_default();
-            let user_text = messages.iter().rev()
+            let user_text = messages
+                .iter()
+                .rev()
                 .find(|m| m.role == Role::User)
                 .and_then(|m| m.content.first())
-                .and_then(|b| if let ContentBlock::Text { text } = b { Some(text.as_str()) } else { None })
+                .and_then(|b| {
+                    if let ContentBlock::Text { text } = b {
+                        Some(text.as_str())
+                    } else {
+                        None
+                    }
+                })
                 .unwrap_or("");
             crate::memory::hermes_analyze(user_text, &assistant_text, &cwd);
 
@@ -214,7 +240,10 @@ pub async fn run_agentic_loop(
         }
 
         // Execute tool calls
-        let tool_uses: Vec<(String, String, serde_json::Value)> = response.message.content.iter()
+        let tool_uses: Vec<(String, String, serde_json::Value)> = response
+            .message
+            .content
+            .iter()
             .filter_map(|block| {
                 if let ContentBlock::ToolUse { id, name, input } = block {
                     Some((id.clone(), name.clone(), input.clone()))
@@ -271,13 +300,23 @@ pub async fn run_agentic_loop(
 
 /// Estimate total tokens in message history
 fn estimate_message_tokens(messages: &[Message]) -> usize {
-    let total_chars: usize = messages.iter().map(|m| {
-        m.content.iter().map(|b| match b {
-            ContentBlock::Text { text } => text.len(),
-            ContentBlock::ToolUse { input, .. } => input.to_string().len(),
-            ContentBlock::ToolResult { content, .. } => content.len(),
-        }).sum::<usize>()
-    }).sum();
+    let total_chars: usize = messages
+        .iter()
+        .map(|m| {
+            m.content
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Text { text } => text.len(),
+                    ContentBlock::ToolUse { input, .. } => input.to_string().len(),
+                    ContentBlock::ToolResult { content, .. } => content.len(),
+                    // Rough heuristic: base64 image ~= data bytes * 4/3. Don't blow
+                    // up the token budget with the actual byte count — treat each
+                    // image as ~1000 tokens for estimation purposes.
+                    ContentBlock::Image { .. } => 1000 * crate::query::CHARS_PER_TOKEN,
+                })
+                .sum::<usize>()
+        })
+        .sum();
     total_chars / CHARS_PER_TOKEN
 }
 
@@ -288,14 +327,18 @@ pub fn compact_messages_public(messages: &mut Vec<Message>) {
 
 /// Compact old messages: keep system context, summarize middle, keep recent
 fn compact_messages(messages: &mut Vec<Message>) {
-    if messages.len() <= 4 { return; }
+    if messages.len() <= 4 {
+        return;
+    }
 
     // Keep first 2 and last 4 messages, summarize the rest
     let keep_start = 2;
     let keep_end = 4;
     let total = messages.len();
 
-    if total <= keep_start + keep_end { return; }
+    if total <= keep_start + keep_end {
+        return;
+    }
 
     let middle_count = total - keep_start - keep_end;
     let summary = format!(
@@ -321,10 +364,14 @@ async fn extract_and_read_error_files(error_output: &str, _executor: &ToolExecut
         let mut seen = std::collections::HashSet::new();
         for cap in re.captures_iter(error_output) {
             let path = cap[1].to_string();
-            if seen.contains(&path) { continue; }
+            if seen.contains(&path) {
+                continue;
+            }
             seen.insert(path.clone());
 
-            if seen.len() > 3 { break; } // max 3 files
+            if seen.len() > 3 {
+                break;
+            } // max 3 files
 
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
                 let line_num: usize = cap[2].parse().unwrap_or(1);
@@ -386,7 +433,8 @@ pub fn repair_json(raw: &str) -> Option<serde_json::Value> {
 // Detects when the AI claims "done" but hasn't actually modified any files.
 // Only triggers once per loop (via the `turn > 0` check in the caller).
 
-static COMPLETION_GUARD_FIRED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static COMPLETION_GUARD_FIRED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 fn completion_guard_triggered(assistant_text: &str, messages: &[Message]) -> bool {
     // Only fire once per session turn
@@ -398,11 +446,26 @@ fn completion_guard_triggered(assistant_text: &str, messages: &[Message]) -> boo
 
     // Check if the assistant claims completion
     let completion_phrases = [
-        "任务已完成", "任务已全部完成", "全部完成", "已经完成", "所有修改已完成",
-        "已全部搞定", "大功告成", "圆满完成", "工作已完成", "实施完成",
-        "all done", "task complete", "implementation complete", "all set",
-        "fully complete", "mission accomplished", "changes are done",
-        "i've completed", "i have completed", "everything is done",
+        "任务已完成",
+        "任务已全部完成",
+        "全部完成",
+        "已经完成",
+        "所有修改已完成",
+        "已全部搞定",
+        "大功告成",
+        "圆满完成",
+        "工作已完成",
+        "实施完成",
+        "all done",
+        "task complete",
+        "implementation complete",
+        "all set",
+        "fully complete",
+        "mission accomplished",
+        "changes are done",
+        "i've completed",
+        "i have completed",
+        "everything is done",
     ];
     let claims_done = completion_phrases.iter().any(|p| lower.contains(p));
     if !claims_done {
@@ -410,7 +473,13 @@ fn completion_guard_triggered(assistant_text: &str, messages: &[Message]) -> boo
     }
 
     // Check if any file_write/file_edit/multi_edit tool was actually used
-    let write_tools = ["file_edit", "file_write", "multi_edit", "file_append", "parallel_edit"];
+    let write_tools = [
+        "file_edit",
+        "file_write",
+        "multi_edit",
+        "file_append",
+        "parallel_edit",
+    ];
     let has_file_change = messages.iter().any(|m| {
         m.content.iter().any(|b| {
             if let ContentBlock::ToolUse { name, .. } = b {

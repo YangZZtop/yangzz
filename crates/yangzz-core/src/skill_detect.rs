@@ -134,9 +134,15 @@ pub fn detect_project(cwd: &Path) -> ProjectProfile {
     profile.has_git = cwd.join(".git").exists();
 
     // Project type inference
-    if profile.frameworks.iter().any(|f| f.contains("Next") || f.contains("Nuxt") || f.contains("React") || f.contains("Vue")) {
+    if profile.frameworks.iter().any(|f| {
+        f.contains("Next") || f.contains("Nuxt") || f.contains("React") || f.contains("Vue")
+    }) {
         profile.project_type = Some("Web Frontend".into());
-    } else if profile.frameworks.iter().any(|f| f.contains("Express") || f.contains("FastAPI") || f.contains("Django")) {
+    } else if profile
+        .frameworks
+        .iter()
+        .any(|f| f.contains("Express") || f.contains("FastAPI") || f.contains("Django"))
+    {
         profile.project_type = Some("Web Backend".into());
     } else if profile.languages.contains(&"Rust".to_string()) {
         profile.project_type = Some("Rust Project".into());
@@ -159,7 +165,10 @@ pub fn profile_to_system_hint(profile: &ProjectProfile) -> String {
         hints.push(format!("Frameworks: {}", profile.frameworks.join(", ")));
     }
     if !profile.package_managers.is_empty() {
-        hints.push(format!("Package managers: {}", profile.package_managers.join(", ")));
+        hints.push(format!(
+            "Package managers: {}",
+            profile.package_managers.join(", ")
+        ));
     }
     if profile.has_tests {
         hints.push("Has test directory".to_string());
@@ -178,5 +187,8 @@ pub fn profile_to_system_hint(profile: &ProjectProfile) -> String {
         return String::new();
     }
 
-    format!("\n--- Auto-detected project context ---\n{}", hints.join("\n"))
+    format!(
+        "\n--- Auto-detected project context ---\n{}",
+        hints.join("\n")
+    )
 }

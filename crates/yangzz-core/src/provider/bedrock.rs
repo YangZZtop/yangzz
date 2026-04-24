@@ -6,7 +6,7 @@ use super::*;
 use crate::message::{ContentBlock, Message, Role, Usage};
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 pub struct BedrockProvider {
     region: String,
@@ -58,13 +58,17 @@ impl BedrockProvider {
 
     /// Build the Bedrock converse request body
     fn build_body(&self, request: &CreateMessageRequest) -> Value {
-        let messages: Vec<Value> = request.messages.iter().filter_map(|m| {
-            let role = match m.role {
-                Role::User => "user",
-                Role::Assistant => "assistant",
-                Role::System => return None,
-            };
-            let content: Vec<Value> = m.content.iter().map(|b| match b {
+        let messages: Vec<Value> =
+            request
+                .messages
+                .iter()
+                .filter_map(|m| {
+                    let role = match m.role {
+                        Role::User => "user",
+                        Role::Assistant => "assistant",
+                        Role::System => return None,
+                    };
+                    let content: Vec<Value> = m.content.iter().map(|b| match b {
                 ContentBlock::Text { text } => json!({"text": text}),
                 ContentBlock::ToolUse { id, name, input } => json!({
                     "toolUse": {"toolUseId": id, "name": name, "input": input}
@@ -76,9 +80,16 @@ impl BedrockProvider {
                         "status": if *is_error { "error" } else { "success" }
                     }
                 }),
+                ContentBlock::Image { source } => json!({
+                    "image": {
+                        "format": source.media_type.strip_prefix("image/").unwrap_or("png"),
+                        "source": { "bytes": source.data }
+                    }
+                }),
             }).collect();
-            Some(json!({"role": role, "content": content}))
-        }).collect();
+                    Some(json!({"role": role, "content": content}))
+                })
+                .collect();
 
         let mut body = json!({
             "messages": messages,
@@ -92,15 +103,19 @@ impl BedrockProvider {
         }
 
         if !request.tools.is_empty() {
-            let tool_config: Vec<Value> = request.tools.iter().map(|t| {
-                json!({
-                    "toolSpec": {
-                        "name": t.name,
-                        "description": t.description,
-                        "inputSchema": {"json": t.input_schema}
-                    }
+            let tool_config: Vec<Value> = request
+                .tools
+                .iter()
+                .map(|t| {
+                    json!({
+                        "toolSpec": {
+                            "name": t.name,
+                            "description": t.description,
+                            "inputSchema": {"json": t.input_schema}
+                        }
+                    })
                 })
-            }).collect();
+                .collect();
             body["toolConfig"] = json!({"tools": tool_config});
         }
 
@@ -110,9 +125,13 @@ impl BedrockProvider {
 
 #[async_trait]
 impl Provider for BedrockProvider {
-    fn name(&self) -> &str { "bedrock" }
+    fn name(&self) -> &str {
+        "bedrock"
+    }
 
-    fn default_model(&self) -> &str { &self.model_id }
+    fn default_model(&self) -> &str {
+        &self.model_id
+    }
 
     async fn create_message(
         &self,
@@ -122,7 +141,9 @@ impl Provider for BedrockProvider {
 
         // Note: Real implementation needs AWS SigV4 signing.
         // Using the OpenAI-compatible proxy pattern for now.
-        let resp = self.client.post(&self.endpoint())
+        let resp = self
+            .client
+            .post(&self.endpoint())
             .header("Content-Type", "application/json")
             .header("X-Amz-Access-Key", &self.access_key)
             .json(&body)
@@ -132,10 +153,15 @@ impl Provider for BedrockProvider {
         let status = resp.status().as_u16();
         if status != 200 {
             let text = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::Api { status, message: text });
+            return Err(ProviderError::Api {
+                status,
+                message: text,
+            });
         }
 
-        let resp_body: Value = resp.json().await
+        let resp_body: Value = resp
+            .json()
+            .await
             .map_err(|e| ProviderError::Deserialize(e.to_string()))?;
 
         // Parse Bedrock converse response
@@ -145,7 +171,9 @@ impl Provider for BedrockProvider {
         if let Some(content) = output["content"].as_array() {
             for block in content {
                 if let Some(text) = block["text"].as_str() {
-                    content_blocks.push(ContentBlock::Text { text: text.to_string() });
+                    content_blocks.push(ContentBlock::Text {
+                        text: text.to_string(),
+                    });
                 }
                 if let Some(tool_use) = block.get("toolUse") {
                     content_blocks.push(ContentBlock::ToolUse {
@@ -187,7 +215,9 @@ impl Provider for BedrockProvider {
     ) -> Result<CreateMessageResponse, ProviderError> {
         // Bedrock streaming uses converse-stream endpoint
         // For simplicity, fall back to non-streaming
-        let _ = tx.send(StreamEvent::MessageStart { model: self.model_id.clone() });
+        let _ = tx.send(StreamEvent::MessageStart {
+            model: self.model_id.clone(),
+        });
         let response = self.create_message(request).await?;
 
         for block in &response.message.content {
@@ -196,8 +226,13 @@ impl Provider for BedrockProvider {
                     let _ = tx.send(StreamEvent::TextDelta { text: text.clone() });
                 }
                 ContentBlock::ToolUse { id, name, input } => {
-                    let _ = tx.send(StreamEvent::ToolUseStart { id: id.clone(), name: name.clone() });
-                    let _ = tx.send(StreamEvent::ToolInputDelta { partial_json: input.to_string() });
+                    let _ = tx.send(StreamEvent::ToolUseStart {
+                        id: id.clone(),
+                        name: name.clone(),
+                    });
+                    let _ = tx.send(StreamEvent::ToolInputDelta {
+                        partial_json: input.to_string(),
+                    });
                 }
                 _ => {}
             }

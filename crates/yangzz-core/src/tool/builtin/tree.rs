@@ -1,13 +1,15 @@
 use crate::tool::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Command;
 
 pub struct TreeTool;
 
 #[async_trait]
 impl Tool for TreeTool {
-    fn name(&self) -> &str { "tree" }
+    fn name(&self) -> &str {
+        "tree"
+    }
 
     fn description(&self) -> &str {
         "Display directory tree structure. Good for understanding project layout."
@@ -25,24 +27,24 @@ impl Tool for TreeTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let path = input["path"].as_str().unwrap_or(".");
         let max_depth = input["max_depth"].as_u64().unwrap_or(3).min(5);
 
-        let full_path = if std::path::Path::new(path).is_absolute() {
-            std::path::PathBuf::from(path)
-        } else {
-            ctx.cwd.join(path)
-        };
+        let full_path = ctx.resolve_existing_path(path)?;
 
         // Try tree command, fall back to find
         let output = if which_exists("tree") {
             let mut args = vec![
-                "-L".to_string(), max_depth.to_string(),
+                "-L".to_string(),
+                max_depth.to_string(),
                 "--noreport".to_string(),
-                "-I".to_string(), "node_modules|.git|target|__pycache__|.next|dist".to_string(),
+                "-I".to_string(),
+                "node_modules|.git|target|__pycache__|.next|dist".to_string(),
             ];
             if let Some(pat) = input["pattern"].as_str() {
                 args.push("-P".to_string());
@@ -54,10 +56,17 @@ impl Tool for TreeTool {
             Command::new("find")
                 .args([
                     full_path.to_string_lossy().as_ref(),
-                    "-maxdepth", &max_depth.to_string(),
-                    "-not", "-path", "*/node_modules/*",
-                    "-not", "-path", "*/.git/*",
-                    "-not", "-path", "*/target/*",
+                    "-maxdepth",
+                    &max_depth.to_string(),
+                    "-not",
+                    "-path",
+                    "*/node_modules/*",
+                    "-not",
+                    "-path",
+                    "*/.git/*",
+                    "-not",
+                    "-path",
+                    "*/target/*",
                 ])
                 .output()
                 .await

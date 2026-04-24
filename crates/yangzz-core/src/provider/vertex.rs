@@ -5,9 +5,8 @@ use super::*;
 use crate::message::{ContentBlock, Message, Role, Usage};
 use async_trait::async_trait;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
-
 
 pub struct VertexProvider {
     project_id: String,
@@ -31,13 +30,15 @@ impl VertexProvider {
     /// Create from environment variables
     pub fn from_env() -> Option<Self> {
         let project_id = std::env::var("GOOGLE_CLOUD_PROJECT")
-            .or_else(|_| std::env::var("GCP_PROJECT_ID")).ok()?;
-        let region = std::env::var("GOOGLE_CLOUD_REGION")
-            .unwrap_or_else(|_| "us-central1".to_string());
+            .or_else(|_| std::env::var("GCP_PROJECT_ID"))
+            .ok()?;
+        let region =
+            std::env::var("GOOGLE_CLOUD_REGION").unwrap_or_else(|_| "us-central1".to_string());
         let access_token = std::env::var("GOOGLE_ACCESS_TOKEN")
-            .or_else(|_| std::env::var("VERTEX_ACCESS_TOKEN")).ok()?;
-        let model_id = std::env::var("VERTEX_MODEL")
-            .unwrap_or_else(|_| "gemini-2.5-pro".to_string());
+            .or_else(|_| std::env::var("VERTEX_ACCESS_TOKEN"))
+            .ok()?;
+        let model_id =
+            std::env::var("VERTEX_MODEL").unwrap_or_else(|_| "gemini-2.5-pro".to_string());
 
         Some(Self::new(&project_id, &region, &access_token, &model_id))
     }
@@ -62,24 +63,44 @@ impl VertexProvider {
     fn build_body(&self, request: &CreateMessageRequest) -> Value {
         if self.model_id.contains("claude") {
             // Anthropic format for Vertex
-            let messages: Vec<Value> = request.messages.iter().filter_map(|m| {
-                let role = match m.role {
-                    Role::User => "user",
-                    Role::Assistant => "assistant",
-                    Role::System => return None,
-                };
-                let content: Vec<Value> = m.content.iter().map(|b| match b {
-                    ContentBlock::Text { text } => json!({"type": "text", "text": text}),
-                    ContentBlock::ToolUse { id, name, input } => json!({
-                        "type": "tool_use", "id": id, "name": name, "input": input
-                    }),
-                    ContentBlock::ToolResult { tool_use_id, content, is_error } => json!({
-                        "type": "tool_result", "tool_use_id": tool_use_id,
-                        "content": content, "is_error": is_error
-                    }),
-                }).collect();
-                Some(json!({"role": role, "content": content}))
-            }).collect();
+            let messages: Vec<Value> = request
+                .messages
+                .iter()
+                .filter_map(|m| {
+                    let role = match m.role {
+                        Role::User => "user",
+                        Role::Assistant => "assistant",
+                        Role::System => return None,
+                    };
+                    let content: Vec<Value> = m
+                        .content
+                        .iter()
+                        .map(|b| match b {
+                            ContentBlock::Text { text } => json!({"type": "text", "text": text}),
+                            ContentBlock::ToolUse { id, name, input } => json!({
+                                "type": "tool_use", "id": id, "name": name, "input": input
+                            }),
+                            ContentBlock::ToolResult {
+                                tool_use_id,
+                                content,
+                                is_error,
+                            } => json!({
+                                "type": "tool_result", "tool_use_id": tool_use_id,
+                                "content": content, "is_error": is_error
+                            }),
+                            ContentBlock::Image { source } => json!({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": source.media_type,
+                                    "data": source.data,
+                                }
+                            }),
+                        })
+                        .collect();
+                    Some(json!({"role": role, "content": content}))
+                })
+                .collect();
 
             let mut body = json!({
                 "anthropic_version": "vertex-2023-10-16",
@@ -92,24 +113,34 @@ impl VertexProvider {
             }
 
             if !request.tools.is_empty() {
-                let tools: Vec<Value> = request.tools.iter().map(|t| json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.input_schema,
-                })).collect();
+                let tools: Vec<Value> = request
+                    .tools
+                    .iter()
+                    .map(|t| {
+                        json!({
+                            "name": t.name,
+                            "description": t.description,
+                            "input_schema": t.input_schema,
+                        })
+                    })
+                    .collect();
                 body["tools"] = json!(tools);
             }
 
             body
         } else {
             // Gemini format
-            let contents: Vec<Value> = request.messages.iter().filter_map(|m| {
-                let role = match m.role {
-                    Role::User => "user",
-                    Role::Assistant => "model",
-                    Role::System => return None,
-                };
-                let parts: Vec<Value> = m.content.iter().map(|b| match b {
+            let contents: Vec<Value> =
+                request
+                    .messages
+                    .iter()
+                    .filter_map(|m| {
+                        let role = match m.role {
+                            Role::User => "user",
+                            Role::Assistant => "model",
+                            Role::System => return None,
+                        };
+                        let parts: Vec<Value> = m.content.iter().map(|b| match b {
                     ContentBlock::Text { text } => json!({"text": text}),
                     ContentBlock::ToolUse { name, input, .. } => json!({
                         "functionCall": {"name": name, "args": input}
@@ -117,9 +148,16 @@ impl VertexProvider {
                     ContentBlock::ToolResult { content, .. } => json!({
                         "functionResponse": {"name": "", "response": {"result": content}}
                     }),
+                    ContentBlock::Image { source } => json!({
+                        "inlineData": {
+                            "mimeType": source.media_type,
+                            "data": source.data,
+                        }
+                    }),
                 }).collect();
-                Some(json!({"role": role, "parts": parts}))
-            }).collect();
+                        Some(json!({"role": role, "parts": parts}))
+                    })
+                    .collect();
 
             let mut body = json!({
                 "contents": contents,
@@ -139,9 +177,13 @@ impl VertexProvider {
 
 #[async_trait]
 impl Provider for VertexProvider {
-    fn name(&self) -> &str { "vertex" }
+    fn name(&self) -> &str {
+        "vertex"
+    }
 
-    fn default_model(&self) -> &str { &self.model_id }
+    fn default_model(&self) -> &str {
+        &self.model_id
+    }
 
     async fn create_message(
         &self,
@@ -149,7 +191,9 @@ impl Provider for VertexProvider {
     ) -> Result<CreateMessageResponse, ProviderError> {
         let body = self.build_body(request);
 
-        let resp = self.client.post(&self.endpoint())
+        let resp = self
+            .client
+            .post(&self.endpoint())
             .header("Authorization", format!("Bearer {}", self.access_token))
             .header("Content-Type", "application/json")
             .json(&body)
@@ -159,10 +203,15 @@ impl Provider for VertexProvider {
         let status = resp.status().as_u16();
         if status != 200 {
             let text = resp.text().await.unwrap_or_default();
-            return Err(ProviderError::Api { status, message: text });
+            return Err(ProviderError::Api {
+                status,
+                message: text,
+            });
         }
 
-        let resp_body: Value = resp.json().await
+        let resp_body: Value = resp
+            .json()
+            .await
             .map_err(|e| ProviderError::Deserialize(e.to_string()))?;
 
         // Parse response based on model type
@@ -189,7 +238,9 @@ impl Provider for VertexProvider {
         tx: mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<CreateMessageResponse, ProviderError> {
         // Fall back to non-streaming for now
-        let _ = tx.send(StreamEvent::MessageStart { model: self.model_id.clone() });
+        let _ = tx.send(StreamEvent::MessageStart {
+            model: self.model_id.clone(),
+        });
         let response = self.create_message(request).await?;
 
         for block in &response.message.content {
@@ -222,7 +273,9 @@ fn parse_anthropic_response(body: &Value) -> (Vec<ContentBlock>, StopReason, Usa
     if let Some(content) = body["content"].as_array() {
         for block in content {
             if let Some(text) = block["text"].as_str() {
-                blocks.push(ContentBlock::Text { text: text.to_string() });
+                blocks.push(ContentBlock::Text {
+                    text: text.to_string(),
+                });
             }
             if block["type"].as_str() == Some("tool_use") {
                 blocks.push(ContentBlock::ToolUse {
@@ -255,7 +308,9 @@ fn parse_gemini_response(body: &Value) -> (Vec<ContentBlock>, StopReason, Usage)
             if let Some(parts) = first["content"]["parts"].as_array() {
                 for part in parts {
                     if let Some(text) = part["text"].as_str() {
-                        blocks.push(ContentBlock::Text { text: text.to_string() });
+                        blocks.push(ContentBlock::Text {
+                            text: text.to_string(),
+                        });
                     }
                 }
             }
@@ -263,8 +318,12 @@ fn parse_gemini_response(body: &Value) -> (Vec<ContentBlock>, StopReason, Usage)
     }
 
     let usage = Usage {
-        input_tokens: body["usageMetadata"]["promptTokenCount"].as_u64().unwrap_or(0) as u32,
-        output_tokens: body["usageMetadata"]["candidatesTokenCount"].as_u64().unwrap_or(0) as u32,
+        input_tokens: body["usageMetadata"]["promptTokenCount"]
+            .as_u64()
+            .unwrap_or(0) as u32,
+        output_tokens: body["usageMetadata"]["candidatesTokenCount"]
+            .as_u64()
+            .unwrap_or(0) as u32,
     };
 
     (blocks, StopReason::EndTurn, usage)

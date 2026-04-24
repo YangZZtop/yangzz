@@ -130,7 +130,10 @@ pub fn detect_sources() -> Vec<MigrationSource> {
                         items.push(MigrationItem {
                             key: format!("rule:{}", entry.file_name().to_string_lossy()),
                             value: content,
-                            description: format!("Cursor rule: {}", entry.file_name().to_string_lossy()),
+                            description: format!(
+                                "Cursor rule: {}",
+                                entry.file_name().to_string_lossy()
+                            ),
                         });
                     }
                 }
@@ -193,7 +196,10 @@ pub fn migrate_to_memory(sources: &[MigrationSource], cwd: &Path) -> Result<Vec<
                     migrated.push(format!("✓ {} → MEMORY.md", item.description));
                 }
                 _ => {
-                    migrated.push(format!("⊘ Skipped: {} (manual migration needed)", item.description));
+                    migrated.push(format!(
+                        "⊘ Skipped: {} (manual migration needed)",
+                        item.description
+                    ));
                 }
             }
         }

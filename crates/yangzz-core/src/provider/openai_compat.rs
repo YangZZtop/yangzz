@@ -1,7 +1,6 @@
 use super::transport::HttpTransport;
 use super::{
-    CreateMessageRequest, CreateMessageResponse, Provider, ProviderError, StopReason,
-    StreamEvent,
+    CreateMessageRequest, CreateMessageResponse, Provider, ProviderError, StopReason, StreamEvent,
 };
 use crate::message::{ContentBlock, Message, Role, Usage};
 use async_trait::async_trait;
@@ -23,13 +22,14 @@ impl OpenAiCompatProvider {
         model: Option<String>,
     ) -> Result<Self, ProviderError> {
         let default_model = model.unwrap_or_else(|| "gpt-4o".to_string());
+        let base_url = normalize_openai_base_url(base_url);
 
         let headers = vec![("content-type", "application/json")];
         // Ollama doesn't need auth
         let transport = if api_key.is_empty() {
-            HttpTransport::new(base_url, "", headers)?
+            HttpTransport::new(&base_url, "", headers)?
         } else {
-            HttpTransport::new(base_url, api_key, headers)?
+            HttpTransport::new(&base_url, api_key, headers)?
         };
 
         Ok(Self {
@@ -62,7 +62,9 @@ impl OpenAiCompatProvider {
                 Role::System => "system",
             };
 
-            // Convert content blocks to OpenAI format
+            // Convert content blocks to OpenAI format (text + image_url).
+            // Images are inlined as data URLs so they survive without any
+            // external storage.
             let content_parts: Vec<serde_json::Value> = msg
                 .content
                 .iter()
@@ -70,6 +72,12 @@ impl OpenAiCompatProvider {
                     ContentBlock::Text { text } => {
                         Some(serde_json::json!({"type": "text", "text": text}))
                     }
+                    ContentBlock::Image { source } => Some(serde_json::json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!("data:{};base64,{}", source.media_type, source.data),
+                        }
+                    })),
                     _ => None,
                 })
                 .collect();
@@ -79,16 +87,14 @@ impl OpenAiCompatProvider {
                 .content
                 .iter()
                 .filter_map(|block| match block {
-                    ContentBlock::ToolUse { id, name, input } => {
-                        Some(serde_json::json!({
-                            "id": id,
-                            "type": "function",
-                            "function": {
-                                "name": name,
-                                "arguments": input.to_string(),
-                            }
-                        }))
-                    }
+                    ContentBlock::ToolUse { id, name, input } => Some(serde_json::json!({
+                        "id": id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": input.to_string(),
+                        }
+                    })),
                     _ => None,
                 })
                 .collect();
@@ -131,13 +137,15 @@ impl OpenAiCompatProvider {
                     msg_json["content"] = serde_json::json!(text);
                 }
                 messages.push(msg_json);
-            } else if content_parts.len() == 1 {
-                // Simple text message
+            } else if content_parts.len() == 1 && content_parts[0]["type"] == "text" {
+                // Simple text-only message: use the plain string shorthand.
                 messages.push(serde_json::json!({
                     "role": role_str,
                     "content": content_parts[0]["text"],
                 }));
             } else if !content_parts.is_empty() {
+                // Multimodal or multi-part — must keep array form so
+                // image_url parts aren't collapsed into null.
                 messages.push(serde_json::json!({
                     "role": role_str,
                     "content": content_parts,
@@ -155,16 +163,22 @@ impl OpenAiCompatProvider {
             body["temperature"] = serde_json::json!(temp);
         }
         if !request.tools.is_empty() {
-            body["tools"] = serde_json::json!(request.tools.iter().map(|t| {
-                serde_json::json!({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.input_schema,
-                    }
-                })
-            }).collect::<Vec<_>>());
+            body["tools"] = serde_json::json!(
+                request
+                    .tools
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "type": "function",
+                            "function": {
+                                "name": t.name,
+                                "description": t.description,
+                                "parameters": t.input_schema,
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            );
         }
         if stream {
             body["stream"] = serde_json::json!(true);
@@ -208,8 +222,7 @@ impl OpenAiCompatProvider {
                 let id = tc["id"].as_str().unwrap_or("").to_string();
                 let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
                 let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                let input: serde_json::Value =
-                    serde_json::from_str(args_str).unwrap_or_default();
+                let input: serde_json::Value = serde_json::from_str(args_str).unwrap_or_default();
                 content.push(ContentBlock::ToolUse { id, name, input });
             }
         }
@@ -224,6 +237,11 @@ impl OpenAiCompatProvider {
             model,
         })
     }
+}
+
+fn normalize_openai_base_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    trimmed.strip_suffix("/v1").unwrap_or(trimmed).to_string()
 }
 
 #[async_trait]
@@ -241,7 +259,10 @@ impl Provider for OpenAiCompatProvider {
         request: &CreateMessageRequest,
     ) -> Result<CreateMessageResponse, ProviderError> {
         let body = self.build_request_body(request, false);
-        let resp = self.transport.post_json("/v1/chat/completions", &body).await?;
+        let resp = self
+            .transport
+            .post_json("/v1/chat/completions", &body)
+            .await?;
         self.parse_response(&resp)
     }
 
@@ -251,7 +272,10 @@ impl Provider for OpenAiCompatProvider {
         tx: mpsc::UnboundedSender<StreamEvent>,
     ) -> Result<CreateMessageResponse, ProviderError> {
         let body = self.build_request_body(request, true);
-        let resp = self.transport.post_stream("/v1/chat/completions", &body).await?;
+        let resp = self
+            .transport
+            .post_stream("/v1/chat/completions", &body)
+            .await?;
 
         let mut final_content = Vec::new();
         let mut current_text = String::new();
@@ -353,8 +377,7 @@ impl Provider for OpenAiCompatProvider {
 
                 // Usage (some providers include it in stream)
                 if let Some(usage) = parsed.get("usage") {
-                    final_usage.input_tokens =
-                        usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+                    final_usage.input_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
                     final_usage.output_tokens =
                         usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
                 }
@@ -366,8 +389,7 @@ impl Provider for OpenAiCompatProvider {
             final_content.push(ContentBlock::text(&current_text));
         }
         for (id, name, args) in &current_tool_calls {
-            let input: serde_json::Value =
-                serde_json::from_str(args).unwrap_or_default();
+            let input: serde_json::Value = serde_json::from_str(args).unwrap_or_default();
             final_content.push(ContentBlock::ToolUse {
                 id: id.clone(),
                 name: name.clone(),
@@ -409,5 +431,18 @@ impl Provider for OpenAiCompatProvider {
         models.sort();
 
         Ok(models)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_openai_base_url;
+
+    #[test]
+    fn normalizes_base_url_with_v1_suffix() {
+        assert_eq!(
+            normalize_openai_base_url("https://fufu.iqach.top/v1"),
+            "https://fufu.iqach.top"
+        );
     }
 }

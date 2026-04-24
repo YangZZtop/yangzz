@@ -16,6 +16,13 @@ pub enum ContentBlock {
     Text {
         text: String,
     },
+    /// Image attachment (for vision-capable models). Carried as base64 +
+    /// media_type (e.g. "image/png"). Providers serialize this differently:
+    /// - OpenAI-compat: `image_url` part with `data:<mt>;base64,<data>` URL
+    /// - Anthropic: native `image` block with base64 source
+    Image {
+        source: ImageSource,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -29,9 +36,28 @@ pub enum ContentBlock {
     },
 }
 
+/// Image data carried inside a ContentBlock::Image. Always base64 so the
+/// message can round-trip through session JSON without external file refs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageSource {
+    /// MIME type, e.g. "image/png", "image/jpeg", "image/webp", "image/gif"
+    pub media_type: String,
+    /// Raw base64 (no data URL prefix)
+    pub data: String,
+}
+
 impl ContentBlock {
     pub fn text(s: impl Into<String>) -> Self {
         Self::Text { text: s.into() }
+    }
+
+    pub fn image(media_type: impl Into<String>, base64: impl Into<String>) -> Self {
+        Self::Image {
+            source: ImageSource {
+                media_type: media_type.into(),
+                data: base64.into(),
+            },
+        }
     }
 
     pub fn as_text(&self) -> Option<&str> {

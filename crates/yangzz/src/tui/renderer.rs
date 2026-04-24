@@ -12,7 +12,11 @@ pub enum UiEvent {
     /// Tool started
     ToolStart { name: String },
     /// Tool result
-    ToolResult { name: String, result: String, is_error: bool },
+    ToolResult {
+        name: String,
+        result: String,
+        is_error: bool,
+    },
     /// Error message
     Error(String),
     /// Info message
@@ -24,7 +28,10 @@ pub enum UiEvent {
     /// Response complete with usage
     ResponseComplete,
     /// Sync usage data back to state
-    UsageUpdate { input_tokens: u32, output_tokens: u32 },
+    UsageUpdate {
+        input_tokens: u32,
+        output_tokens: u32,
+    },
     /// Sync messages back to state after agentic loop
     MessagesSync(Vec<Message>),
 }
@@ -66,7 +73,9 @@ impl Renderer for TuiRenderer {
             let text = std::mem::take(&mut self.streaming_text);
             self.send(UiEvent::AssistantComplete(text));
         }
-        self.send(UiEvent::ToolStart { name: name.to_string() });
+        self.send(UiEvent::ToolStart {
+            name: name.to_string(),
+        });
     }
 
     fn render_tool_result(&mut self, name: &str, result: &str, is_error: bool) {

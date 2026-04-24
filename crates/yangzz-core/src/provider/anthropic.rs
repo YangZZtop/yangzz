@@ -1,7 +1,6 @@
 use super::transport::HttpTransport;
 use super::{
-    CreateMessageRequest, CreateMessageResponse, Provider, ProviderError, StopReason,
-    StreamEvent,
+    CreateMessageRequest, CreateMessageResponse, Provider, ProviderError, StopReason, StreamEvent,
 };
 use crate::message::{ContentBlock, Message, Role, Usage};
 use async_trait::async_trait;
@@ -33,7 +32,11 @@ impl AnthropicProvider {
         })
     }
 
-    pub fn with_base_url(api_key: &str, base_url: &str, model: Option<String>) -> Result<Self, ProviderError> {
+    pub fn with_base_url(
+        api_key: &str,
+        base_url: &str,
+        model: Option<String>,
+    ) -> Result<Self, ProviderError> {
         let transport = HttpTransport::new(
             base_url,
             "",
@@ -50,14 +53,58 @@ impl AnthropicProvider {
         })
     }
 
-    fn build_request_body(&self, request: &CreateMessageRequest, stream: bool) -> serde_json::Value {
+    fn build_request_body(
+        &self,
+        request: &CreateMessageRequest,
+        stream: bool,
+    ) -> serde_json::Value {
+        // Convert our internal ContentBlock into Anthropic wire format.
+        // Their image block requires a nested `source: {type:"base64", ...}`
+        // which isn't exactly the shape we use internally, so we map manually.
+        fn convert_content(content: &[ContentBlock]) -> Vec<serde_json::Value> {
+            content
+                .iter()
+                .map(|b| match b {
+                    ContentBlock::Text { text } => {
+                        serde_json::json!({ "type": "text", "text": text })
+                    }
+                    ContentBlock::Image { source } => serde_json::json!({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": source.media_type,
+                            "data": source.data,
+                        }
+                    }),
+                    ContentBlock::ToolUse { id, name, input } => serde_json::json!({
+                        "type": "tool_use",
+                        "id": id,
+                        "name": name,
+                        "input": input,
+                    }),
+                    ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        is_error,
+                    } => {
+                        serde_json::json!({
+                            "type": "tool_result",
+                            "tool_use_id": tool_use_id,
+                            "content": content,
+                            "is_error": is_error,
+                        })
+                    }
+                })
+                .collect()
+        }
+
         let mut body = serde_json::json!({
             "model": request.model,
             "max_tokens": request.max_tokens,
             "messages": request.messages.iter().map(|m| {
                 serde_json::json!({
                     "role": m.role,
-                    "content": m.content,
+                    "content": convert_content(&m.content),
                 })
             }).collect::<Vec<_>>(),
         });
@@ -69,13 +116,19 @@ impl AnthropicProvider {
             body["temperature"] = serde_json::json!(temp);
         }
         if !request.tools.is_empty() {
-            body["tools"] = serde_json::json!(request.tools.iter().map(|t| {
-                serde_json::json!({
-                    "name": t.name,
-                    "description": t.description,
-                    "input_schema": t.input_schema,
-                })
-            }).collect::<Vec<_>>());
+            body["tools"] = serde_json::json!(
+                request
+                    .tools
+                    .iter()
+                    .map(|t| {
+                        serde_json::json!({
+                            "name": t.name,
+                            "description": t.description,
+                            "input_schema": t.input_schema,
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            );
         }
         if stream {
             body["stream"] = serde_json::json!(true);
@@ -84,7 +137,10 @@ impl AnthropicProvider {
         body
     }
 
-    fn parse_response(&self, value: &serde_json::Value) -> Result<CreateMessageResponse, ProviderError> {
+    fn parse_response(
+        &self,
+        value: &serde_json::Value,
+    ) -> Result<CreateMessageResponse, ProviderError> {
         let model = value["model"].as_str().unwrap_or("unknown").to_string();
         let stop_reason = match value["stop_reason"].as_str() {
             Some("end_turn") => StopReason::EndTurn,
@@ -196,7 +252,9 @@ impl Provider for AnthropicProvider {
                     }
                 }
 
-                if data.is_empty() { continue; }
+                if data.is_empty() {
+                    continue;
+                }
 
                 let parsed: serde_json::Value = match serde_json::from_str(data) {
                     Ok(v) => v,
@@ -206,7 +264,9 @@ impl Provider for AnthropicProvider {
                 match event_type {
                     "message_start" => {
                         final_model = parsed["message"]["model"]
-                            .as_str().unwrap_or("").to_string();
+                            .as_str()
+                            .unwrap_or("")
+                            .to_string();
                         let _ = tx.send(StreamEvent::MessageStart {
                             model: final_model.clone(),
                         });
@@ -217,9 +277,13 @@ impl Provider for AnthropicProvider {
                         if block_type == "tool_use" {
                             in_tool_use = true;
                             current_tool_id = parsed["content_block"]["id"]
-                                .as_str().unwrap_or("").to_string();
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string();
                             current_tool_name = parsed["content_block"]["name"]
-                                .as_str().unwrap_or("").to_string();
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string();
                             current_tool_input.clear();
                             let _ = tx.send(StreamEvent::ToolUseStart {
                                 id: current_tool_id.clone(),
@@ -234,13 +298,14 @@ impl Provider for AnthropicProvider {
                     "content_block_delta" => {
                         let delta_type = parsed["delta"]["type"].as_str().unwrap_or("");
                         if delta_type == "text_delta" {
-                            let text = parsed["delta"]["text"]
-                                .as_str().unwrap_or("").to_string();
+                            let text = parsed["delta"]["text"].as_str().unwrap_or("").to_string();
                             current_text.push_str(&text);
                             let _ = tx.send(StreamEvent::TextDelta { text });
                         } else if delta_type == "input_json_delta" {
                             let json = parsed["delta"]["partial_json"]
-                                .as_str().unwrap_or("").to_string();
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string();
                             current_tool_input.push_str(&json);
                             let _ = tx.send(StreamEvent::ToolInputDelta { partial_json: json });
                         }
@@ -286,7 +351,9 @@ impl Provider for AnthropicProvider {
                     }
                     "error" => {
                         let msg = parsed["error"]["message"]
-                            .as_str().unwrap_or("unknown error").to_string();
+                            .as_str()
+                            .unwrap_or("unknown error")
+                            .to_string();
                         let _ = tx.send(StreamEvent::Error { message: msg });
                     }
                     _ => {}

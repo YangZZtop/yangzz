@@ -22,7 +22,7 @@ pub const PRESETS: &[ProviderPreset] = &[
     ProviderPreset {
         name: "openai",
         api_key_env: "OPENAI_API_KEY",
-        key_prefix: "sk-",
+        key_prefix: "", // Don't guess from key prefix — relay keys also use "sk-". Detect via URL instead.
         base_url: "https://api.openai.com",
         default_model: "gpt-4o",
         api_format: ApiFormat::OpenAi,
@@ -60,6 +60,14 @@ pub const PRESETS: &[ProviderPreset] = &[
         api_format: ApiFormat::OpenAi,
     },
     ProviderPreset {
+        name: "xiaomi",
+        api_key_env: "",
+        key_prefix: "",
+        base_url: "https://fufu.iqach.top/v1",
+        default_model: "mimo-v2.5-pro",
+        api_format: ApiFormat::OpenAi,
+    },
+    ProviderPreset {
         name: "ollama",
         api_key_env: "",
         key_prefix: "",
@@ -81,6 +89,23 @@ pub fn detect_provider_by_key(key: &str) -> Option<&'static ProviderPreset> {
     candidates.sort_by(|a, b| b.key_prefix.len().cmp(&a.key_prefix.len()));
 
     candidates.into_iter().next()
+}
+
+/// Auto-detect provider from base URL — more reliable than key prefix in the relay era.
+/// Matches against official provider domains. Unknown URLs default to OpenAI-compatible (relays).
+pub fn detect_provider_by_url(url: &str) -> Option<&'static ProviderPreset> {
+    let lower = url.to_lowercase();
+    PRESETS.iter().find(|p| {
+        if p.base_url.is_empty() {
+            return false;
+        }
+        // Extract hostname portion from base_url for matching
+        let host = p
+            .base_url
+            .trim_start_matches("https://")
+            .trim_start_matches("http://");
+        lower.contains(host)
+    })
 }
 
 /// Find preset by name

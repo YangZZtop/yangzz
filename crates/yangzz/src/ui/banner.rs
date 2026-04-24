@@ -1,7 +1,7 @@
 use super::format::*;
 use super::i18n::t;
-use yangzz_core::config::model_meta;
 use std::process::Command;
+use yangzz_core::config::model_meta;
 
 /// Box-drawing helpers
 fn box_top(w: usize) -> String {
@@ -16,7 +16,11 @@ fn box_bot(w: usize) -> String {
 fn box_line(w: usize, content: &str) -> String {
     // strip ANSI for length calculation
     let visible_len = strip_ansi_len(content);
-    let pad = if w > visible_len + 2 { w - visible_len - 2 } else { 0 };
+    let pad = if w > visible_len + 2 {
+        w - visible_len - 2
+    } else {
+        0
+    };
     format!("  {DIM}│{RESET} {content}{} {DIM}│{RESET}", " ".repeat(pad))
 }
 
@@ -24,13 +28,22 @@ fn strip_ansi_len(s: &str) -> usize {
     let mut len = 0usize;
     let mut in_esc = false;
     for ch in s.chars() {
-        if ch == '\x1b' { in_esc = true; continue; }
-        if in_esc { if ch == 'm' { in_esc = false; } continue; }
+        if ch == '\x1b' {
+            in_esc = true;
+            continue;
+        }
+        if in_esc {
+            if ch == 'm' {
+                in_esc = false;
+            }
+            continue;
+        }
         // CJK characters take 2 columns
         if ('\u{4e00}'..='\u{9fff}').contains(&ch)
             || ('\u{3400}'..='\u{4dbf}').contains(&ch)
             || ('\u{f900}'..='\u{faff}').contains(&ch)
-            || ('\u{ff00}'..='\u{ffef}').contains(&ch) {
+            || ('\u{ff00}'..='\u{ffef}').contains(&ch)
+        {
             len += 2;
         } else {
             len += 1;
@@ -51,7 +64,9 @@ pub fn print_welcome(model: &str, provider: &str, version: &str) {
         .or_else(|_| std::env::var("USERNAME"))
         .unwrap_or_default();
 
-    let term_w = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(80);
+    let term_w = crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80);
     let bw = term_w.min(62).max(40); // box inner width
     let s = t();
     let meta = model_meta::lookup_model(model);
@@ -73,15 +88,22 @@ pub fn print_welcome(model: &str, provider: &str, version: &str) {
 
     // ═══ Header box: brand + version ═══
     println!("{}", box_top(bw));
-    println!("{}", box_line(bw, &format!(
-        "{BOLD_GOLD}yangzz{RESET}  {DIM}v{version}{RESET}  {DIM}·{RESET}  {DIM}{}{RESET}",
-        s.tagline
-    )));
+    println!(
+        "{}",
+        box_line(
+            bw,
+            &format!(
+                "{BOLD_GOLD}yangzz{RESET}  {DIM}v{version}{RESET}  {DIM}·{RESET}  {DIM}{}{RESET}",
+                s.tagline
+            )
+        )
+    );
     println!("{}", box_mid(bw));
 
     // ═══ Model info block ═══
     {
-        let model_line = format!("{BOLD_GOLD}{model}{RESET}  {DIM}via{RESET} {DIM}{provider}{RESET}");
+        let model_line =
+            format!("{BOLD_GOLD}{model}{RESET}  {DIM}via{RESET} {DIM}{provider}{RESET}");
         println!("{}", box_line(bw, &model_line));
 
         if let Some(m) = meta {
@@ -98,20 +120,35 @@ pub fn print_welcome(model: &str, provider: &str, version: &str) {
             if m.cache_read_price.is_some() || m.cache_write_price.is_some() {
                 let mut cache_parts = Vec::new();
                 if let Some(cr) = m.cache_read_price {
-                    cache_parts.push(format!("{DIM}cache read{RESET} {GREEN}{}{RESET}{DIM}/M{RESET}", model_meta::format_price(cr)));
+                    cache_parts.push(format!(
+                        "{DIM}cache read{RESET} {GREEN}{}{RESET}{DIM}/M{RESET}",
+                        model_meta::format_price(cr)
+                    ));
                 }
                 if let Some(cw) = m.cache_write_price {
-                    cache_parts.push(format!("{DIM}cache write{RESET} {SOFT_GOLD}{}{RESET}{DIM}/M{RESET}", model_meta::format_price(cw)));
+                    cache_parts.push(format!(
+                        "{DIM}cache write{RESET} {SOFT_GOLD}{}{RESET}{DIM}/M{RESET}",
+                        model_meta::format_price(cw)
+                    ));
                 }
-                println!("{}", box_line(bw, &cache_parts.join(&format!("  {DIM}·{RESET}  "))));
+                println!(
+                    "{}",
+                    box_line(bw, &cache_parts.join(&format!("  {DIM}·{RESET}  ")))
+                );
             }
 
             // Reasoning
             if m.supports_reasoning {
                 let effort = m.reasoning_effort.unwrap_or("medium");
-                println!("{}", box_line(bw, &format!(
-                    "{MAGENTA}◆{RESET} {DIM}reasoning{RESET}  {MAGENTA}{effort}{RESET}"
-                )));
+                println!(
+                    "{}",
+                    box_line(
+                        bw,
+                        &format!(
+                            "{MAGENTA}◆{RESET} {DIM}reasoning{RESET}  {MAGENTA}{effort}{RESET}"
+                        )
+                    )
+                );
             }
         }
     }

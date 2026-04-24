@@ -37,19 +37,30 @@ pub struct PluginTool {
 
 impl PluginTool {
     fn new(manifest: PluginManifest, plugin_dir: PathBuf) -> Self {
-        Self { manifest, plugin_dir }
+        Self {
+            manifest,
+            plugin_dir,
+        }
     }
 }
 
 #[async_trait]
 impl Tool for PluginTool {
-    fn name(&self) -> &str { &self.manifest.name }
+    fn name(&self) -> &str {
+        &self.manifest.name
+    }
 
-    fn description(&self) -> &str { &self.manifest.description }
+    fn description(&self) -> &str {
+        &self.manifest.description
+    }
 
-    fn input_schema(&self) -> Value { self.manifest.input_schema.clone() }
+    fn input_schema(&self) -> Value {
+        self.manifest.input_schema.clone()
+    }
 
-    fn is_read_only(&self) -> bool { self.manifest.read_only }
+    fn is_read_only(&self) -> bool {
+        self.manifest.read_only
+    }
 
     async fn execute(&self, input: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         use tokio::process::Command;
@@ -64,8 +75,12 @@ impl Tool for PluginTool {
         // Set PLUGIN_DIR so the plugin knows where it lives
         cmd.env("YANGZZ_PLUGIN_DIR", &self.plugin_dir);
 
-        let mut child = cmd.spawn()
-            .map_err(|e| ToolError::Execution(format!("Plugin '{}' failed to start: {e}", self.manifest.name)))?;
+        let mut child = cmd.spawn().map_err(|e| {
+            ToolError::Execution(format!(
+                "Plugin '{}' failed to start: {e}",
+                self.manifest.name
+            ))
+        })?;
 
         // Write input JSON to stdin
         if let Some(mut stdin) = child.stdin.take() {
@@ -75,8 +90,9 @@ impl Tool for PluginTool {
             drop(stdin);
         }
 
-        let output = child.wait_with_output().await
-            .map_err(|e| ToolError::Execution(format!("Plugin '{}' error: {e}", self.manifest.name)))?;
+        let output = child.wait_with_output().await.map_err(|e| {
+            ToolError::Execution(format!("Plugin '{}' error: {e}", self.manifest.name))
+        })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
@@ -115,19 +131,23 @@ pub fn load_plugins(cwd: &Path) -> Vec<Box<dyn Tool>> {
         }
 
         match std::fs::read_to_string(&manifest_path) {
-            Ok(content) => {
-                match serde_json::from_str::<PluginManifest>(&content) {
-                    Ok(manifest) => {
-                        info!("Loaded plugin: {} from {}", manifest.name, path.display());
-                        tools.push(Box::new(PluginTool::new(manifest, path)));
-                    }
-                    Err(e) => {
-                        warn!("Invalid plugin manifest at {}: {e}", manifest_path.display());
-                    }
+            Ok(content) => match serde_json::from_str::<PluginManifest>(&content) {
+                Ok(manifest) => {
+                    info!("Loaded plugin: {} from {}", manifest.name, path.display());
+                    tools.push(Box::new(PluginTool::new(manifest, path)));
                 }
-            }
+                Err(e) => {
+                    warn!(
+                        "Invalid plugin manifest at {}: {e}",
+                        manifest_path.display()
+                    );
+                }
+            },
             Err(e) => {
-                warn!("Cannot read plugin manifest at {}: {e}", manifest_path.display());
+                warn!(
+                    "Cannot read plugin manifest at {}: {e}",
+                    manifest_path.display()
+                );
             }
         }
     }

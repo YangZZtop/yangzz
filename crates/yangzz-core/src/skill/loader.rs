@@ -1,31 +1,46 @@
 use super::Skill;
 use std::path::Path;
 
-/// Load skills from SKILL.md files in a directory
+/// Load skills from SKILL.md files — merge global (~/.yangzz/skills/) + project
+/// (.yangzz/skills/) + single project-root SKILL.md.
+/// Project overrides global on name collision.
 pub fn load_skills(dir: &Path) -> Vec<Skill> {
-    let mut skills = Vec::new();
+    let mut skills: Vec<Skill> = Vec::new();
 
-    // Load from skills directory
-    if let Ok(entries) = std::fs::read_dir(dir.join(".yangzz/skills")) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|e| e == "md") {
-                if let Some(skill) = parse_skill_file(&path) {
-                    skills.push(skill);
-                }
-            }
-        }
+    // Global skills first (lowest priority)
+    load_md_into(&crate::paths::yangzz_dir().join("skills"), &mut skills);
+
+    // Project-local overrides by name
+    let mut project: Vec<Skill> = Vec::new();
+    load_md_into(&dir.join(".yangzz/skills"), &mut project);
+    for s in project {
+        skills.retain(|ex| !ex.name.eq_ignore_ascii_case(&s.name));
+        skills.push(s);
     }
 
-    // Load single SKILL.md at project root
+    // Single SKILL.md at project root (treated as project)
     let root_skill = dir.join("SKILL.md");
     if root_skill.exists() {
         if let Some(skill) = parse_skill_file(&root_skill) {
+            skills.retain(|ex| !ex.name.eq_ignore_ascii_case(&skill.name));
             skills.push(skill);
         }
     }
 
     skills
+}
+
+fn load_md_into(dir: &Path, out: &mut Vec<Skill>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "md") {
+                if let Some(skill) = parse_skill_file(&path) {
+                    out.push(skill);
+                }
+            }
+        }
+    }
 }
 
 /// Parse a SKILL.md file with YAML front matter

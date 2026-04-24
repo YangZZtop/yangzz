@@ -1,13 +1,15 @@
 use crate::tool::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Command;
 
 pub struct GrepTool;
 
 #[async_trait]
 impl Tool for GrepTool {
-    fn name(&self) -> &str { "grep" }
+    fn name(&self) -> &str {
+        "grep"
+    }
 
     fn description(&self) -> &str {
         "Search for a pattern in files using ripgrep (rg) or grep. Returns matching lines with file paths and line numbers."
@@ -38,22 +40,18 @@ impl Tool for GrepTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let pattern = input["pattern"]
             .as_str()
             .ok_or_else(|| ToolError::Validation("Missing 'pattern' field".into()))?;
 
-        let search_path = input["path"]
-            .as_str()
-            .unwrap_or(".");
+        let search_path = input["path"].as_str().unwrap_or(".");
 
-        let full_path = if std::path::Path::new(search_path).is_absolute() {
-            std::path::PathBuf::from(search_path)
-        } else {
-            ctx.cwd.join(search_path)
-        };
+        let full_path = ctx.resolve_existing_path(search_path)?;
 
         let fixed = input["fixed_strings"].as_bool().unwrap_or(false);
 
@@ -65,7 +63,9 @@ impl Tool for GrepTool {
                 "--color=never".to_string(),
                 "--max-count=50".to_string(),
             ];
-            if fixed { args.push("--fixed-strings".to_string()); }
+            if fixed {
+                args.push("--fixed-strings".to_string());
+            }
             if let Some(include) = input["include"].as_str() {
                 args.push("--glob".to_string());
                 args.push(include.to_string());
@@ -74,11 +74,10 @@ impl Tool for GrepTool {
             args.push(full_path.to_string_lossy().to_string());
             ("rg", args)
         } else {
-            let mut args = vec![
-                "-rn".to_string(),
-                "--color=never".to_string(),
-            ];
-            if fixed { args.push("-F".to_string()); }
+            let mut args = vec!["-rn".to_string(), "--color=never".to_string()];
+            if fixed {
+                args.push("-F".to_string());
+            }
             if let Some(include) = input["include"].as_str() {
                 args.push("--include".to_string());
                 args.push(include.to_string());
@@ -97,7 +96,9 @@ impl Tool for GrepTool {
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         if stdout.is_empty() {
-            Ok(ToolOutput::success(format!("No matches found for '{pattern}'")))
+            Ok(ToolOutput::success(format!(
+                "No matches found for '{pattern}'"
+            )))
         } else {
             let mut result = stdout.to_string();
             if result.len() > 50000 {

@@ -1,14 +1,20 @@
+mod guide;
 mod repl;
+mod repl_commands;
+mod repl_help;
+mod repl_render;
+mod slash;
 mod tui;
 mod ui;
 
 use clap::Parser;
 use std::sync::Arc;
-use yangzz_core::config::{self, Settings};
 use yangzz_core::config::settings::CliOverrides;
+use yangzz_core::config::{self, Settings};
 use yangzz_core::permission::PermissionManager;
 use yangzz_core::tool::{ToolExecutor, ToolRegistry};
 
+pub use guide::print_guide;
 use ui::format::*;
 
 #[derive(Parser)]
@@ -19,7 +25,7 @@ struct Cli {
     /// Initial prompt (if provided, runs in single-shot mode)
     prompt: Option<String>,
 
-    /// Provider name (anthropic, openai, gemini, deepseek, glm, grok, ollama)
+    /// Provider name (anthropic, openai, gemini, deepseek, glm, grok, xiaomi, ollama)
     #[arg(long)]
     provider: Option<String>,
 
@@ -39,7 +45,14 @@ struct Cli {
     #[arg(long)]
     setup: bool,
 
-    /// Use TUI mode (dual-pane terminal UI)
+    /// Run classic REPL mode (default since v0.3.1 — matches README).
+    /// Kept as a no-op flag so `yangzz --repl` from old scripts still works.
+    #[arg(long, alias = "legacy")]
+    repl: bool,
+
+    /// Opt into experimental full-screen TUI (alternate screen + modal
+    /// permission dialogs). REPL is recommended for daily use because
+    /// it preserves native terminal scroll / selection / copy.
     #[arg(long)]
     tui: bool,
 
@@ -50,6 +63,14 @@ struct Cli {
     /// Run health check (config, provider, tools)
     #[arg(long)]
     doctor: bool,
+
+    /// Uninstall yangzz: remove config, sessions, memory (with confirmation)
+    #[arg(long)]
+    uninstall: bool,
+
+    /// Print all yangzz data paths (useful for debugging / manual cleanup)
+    #[arg(long = "where")]
+    where_paths: bool,
 }
 
 #[tokio::main]
@@ -57,8 +78,7 @@ async fn main() -> anyhow::Result<()> {
     // Init logging — only show on RUST_LOG, silent by default
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("yangzz=warn".parse()?)
+            tracing_subscriber::EnvFilter::from_default_env().add_directive("yangzz=warn".parse()?),
         )
         .with_target(false)
         .with_writer(std::io::stderr)
@@ -74,6 +94,27 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let cli = Cli::parse();
+
+    // Silently migrate legacy data (pre-v0.3.0) on every startup.
+    // Best-effort; safe to run repeatedly.
+    if yangzz_core::paths::maybe_migrate_legacy() {
+        println!(
+            "  {DIM}已自动迁移旧版数据 → {}{RESET}",
+            yangzz_core::paths::yangzz_dir().display()
+        );
+    }
+
+    // --where flag: print all data paths
+    if cli.where_paths {
+        print_where();
+        return Ok(());
+    }
+
+    // --uninstall flag: interactive uninstall
+    if cli.uninstall {
+        run_uninstall();
+        return Ok(());
+    }
 
     // --guide flag: show quick-start guide
     if cli.guide {
@@ -139,15 +180,31 @@ async fn main() -> anyhow::Result<()> {
     let registry = ToolRegistry::with_builtins(&cwd);
 
     if let Some(prompt) = cli.prompt {
+        // Single-shot mode — REPL-style rendering to stdout makes sense for
+        // pipelines (yangzz "explain" | tee out.txt).
         let permission = Arc::new(PermissionManager::new());
         let executor = ToolExecutor::new(registry, permission, cwd);
         repl::single_shot(&provider, &model, max_tokens, &prompt, &executor).await?;
     } else if cli.tui {
-        // TUI mode: auto-approve tools (raw mode breaks stdin prompts)
-        let permission = Arc::new(PermissionManager::auto_approve());
+        // Opt-in: experimental TUI (alternate-screen + modal permissions).
+        // Trade-off: loses native terminal scroll / selection / copy.
+        let (perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel();
+        let permission = Arc::new(PermissionManager::channel(perm_tx));
         let executor = ToolExecutor::new(registry, permission, cwd);
-        tui::run(&provider, &model, max_tokens, Arc::new(executor), &settings).await?;
+        tui::run(
+            &provider,
+            &model,
+            max_tokens,
+            Arc::new(executor),
+            &settings,
+            perm_rx,
+        )
+        .await?;
     } else {
+        // Default (v0.3.1+): classic REPL — the documented product.
+        // Native scroll, native selection, full slash-command fidelity.
+        // `--repl` is now a no-op but kept so existing scripts don't break.
+        let _ = cli.repl;
         let permission = Arc::new(PermissionManager::new());
         let executor = ToolExecutor::new(registry, permission, cwd);
         repl::run(&provider, &model, max_tokens, &executor, &settings).await?;
@@ -156,100 +213,13 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ── Quick-start Guide (yangzz --guide) ──
-
-pub fn print_guide() {
-    println!();
-    println!("  {BOLD}yangzz 快速上手指南{RESET}");
-    println!("  ══════════════════");
-    println!();
-    println!("  {BOLD_GOLD}一、配置（只需做一次）{RESET}");
-    println!();
-    println!("  yangzz 的配置写在自己的文件里，不影响其他工具。");
-    println!();
-    println!("  {BOLD}配置文件位置：{RESET}");
-    println!("    Mac:     ~/Library/Application Support/yangzz/config.toml");
-    println!("    Linux:   ~/.config/yangzz/config.toml");
-    println!("    Windows: %APPDATA%\\yangzz\\config.toml");
-    println!("    项目级:   .yangzz.toml 或 .yangzz/config.toml");
-    println!();
-    println!("  {BOLD_GOLD}最常见：用中转站{RESET}");
-    println!();
-    println!("  从中转商拿到 地址+Key 后，创建配置文件写入：");
-    println!();
-    println!("    {DIM}# ~/Library/Application Support/yangzz/config.toml{RESET}");
-    println!();
-    println!("    {BOLD}provider = \"my-relay\"{RESET}");
-    println!("    {BOLD}model = \"claude-sonnet-4-20250514\"{RESET}");
-    println!();
-    println!("    {BOLD}[[providers]]{RESET}");
-    println!("    {BOLD}name = \"my-relay\"{RESET}");
-    println!("    {BOLD}api_key = \"sk-你的key\"{RESET}");
-    println!("    {BOLD}base_url = \"https://你的中转地址\"{RESET}");
-    println!("    {BOLD}default_model = \"claude-sonnet-4-20250514\"{RESET}");
-    println!("    {BOLD}api_format = \"openai\"{RESET}          {DIM}# 绝大多数中转都是 openai 格式{RESET}");
-    println!("    {BOLD}max_tokens = 16384{RESET}             {DIM}# 单次最大输出（可选）{RESET}");
-    println!("    {BOLD}thinking_budget = 32000{RESET}        {DIM}# 思考深度（可选）{RESET}");
-    println!("    {BOLD}context_window = 1000000{RESET}       {DIM}# 上下文窗口（可选，主流模型已 1M）{RESET}");
-    println!("    {BOLD}reasoning_effort = \"medium\"{RESET}    {DIM}# 推理强度 low/medium/high（可选）{RESET}");
-    println!("    {BOLD}temperature = 0.7{RESET}              {DIM}# 创造性 0~1（可选）{RESET}");
-    println!();
-    println!("  配完直接运行 {BOLD}yangzz{RESET} 即可。");
-    println!();
-    println!("  {BOLD_GOLD}配多个中转？{RESET}  写多个 [[providers]]，对话中 /model 切换。");
-    println!("  {BOLD_GOLD}用 Ollama？{RESET}   base_url = \"http://localhost:11434\"，api_key 随便填。");
-    println!();
-    println!("  ──────────────────");
-    println!();
-    println!("  {BOLD_GOLD}二、REPL 常用命令{RESET}");
-    println!();
-    println!("    {GOLD}/help{RESET}            所有命令");
-    println!("    {GOLD}/model <name>{RESET}    切换模型");
-    println!("    {GOLD}/undo{RESET}            撤销上次文件编辑");
-    println!("    {GOLD}/memory [text]{RESET}   查看/添加记忆");
-    println!("    {GOLD}/compact{RESET}         压缩对话历史");
-    println!("    {GOLD}/recall <kw>{RESET}     搜索过去会话");
-    println!("    {GOLD}/task [cmd]{RESET}      任务队列");
-    println!("    {GOLD}/route <text>{RESET}    预览智能路由");
-    println!("    {GOLD}/profile{RESET}         项目技术栈检测");
-    println!("    {GOLD}/policy{RESET}          查看执行策略");
-    println!("    {GOLD}/guide{RESET}           查看本指南");
-    println!("    {GOLD}/status{RESET}          Token 用量 + 费用");
-    println!("    {GOLD}/quit{RESET}            退出");
-    println!();
-    println!("  ──────────────────");
-    println!();
-    println!("  {BOLD_GOLD}三、自动运行的功能（你不需要做任何事）{RESET}");
-    println!();
-    println!("    • {BOLD}Hermes 自进化{RESET}     — 自动学习你的偏好，写入 MEMORY.md");
-    println!("    • {BOLD}自动记忆捕获{RESET}      — 偏好/教训/事实/成功模式自动提取");
-    println!("    • {BOLD}完成度检查{RESET}        — 防止 AI 虚报完成，自动追问");
-    println!("    • {BOLD}工具失败重试{RESET}      — 超时/连接错误自动重试一次");
-    println!("    • {BOLD}项目技能检测{RESET}      — 首轮对话自动识别语言/框架/包管理器");
-    println!("    • {BOLD}4层记忆降级{RESET}       — context 快满时自动切换 L0→L1→L2→L3");
-    println!("    • {BOLD}危险命令拦截{RESET}      — rm -rf / DROP TABLE 等 27 种模式");
-    println!("    • {BOLD}符号链接防护{RESET}      — 自动拒绝写入符号链接");
-    println!("    • {BOLD}密钥扫描{RESET}          — 代码中出现 API key 自动警告");
-    println!("    • {BOLD}沙箱隔离{RESET}          — 配置 policy.toml 后自动生效");
-    println!("    • {BOLD}Auto Compact{RESET}      — 上下文超 75% 自动压缩");
-    println!("    • {BOLD}JSON 修复{RESET}         — 弱模型的 JSON 输出自动修复");
-    println!("    • {BOLD}Pangu 排版{RESET}        — 中英文之间自动加空格");
-    println!();
-    println!("  ──────────────────");
-    println!();
-    println!("  {BOLD_GOLD}四、快捷键{RESET}");
-    println!();
-    println!("    {GOLD}↑/↓{RESET}       翻阅历史输入");
-    println!("    {GOLD}Ctrl+C{RESET}    取消输入或中断 AI");
-    println!("    {GOLD}Ctrl+D{RESET}    退出");
-    println!("    {GOLD}行尾 \\{RESET}    多行输入");
-    println!();
-    println!("  {DIM}配置向导: yangzz --setup{RESET}");
-    println!("  {DIM}健康检查: yangzz --doctor{RESET}");
-    println!();
-}
-
 // ── Interactive Setup Wizard ──
+// 核心心智模型（基于 cc-switch / sub2api / new-api 三项目分析）：
+//   - provider  = 你给这份配置起的名字（不是厂商）
+//   - base_url  = 实际入口地址（允许带路径前缀，如 /antigravity）
+//   - api_format = 入口用什么协议说话（openai / anthropic / gemini / auto）
+//   - model     = 希望上游路由到的模型名
+// 只问必要问题，其他给合理默认。
 
 /// Returns true if setup succeeded and caller should continue into REPL
 fn run_setup_wizard() -> bool {
@@ -259,7 +229,9 @@ fn run_setup_wizard() -> bool {
         print!("  {msg}");
         io::stdout().flush().unwrap();
         let mut buf = String::new();
-        io::stdin().read_line(&mut buf).unwrap();
+        if io::stdin().read_line(&mut buf).is_err() {
+            return String::new();
+        }
         buf.trim().to_string()
     }
 
@@ -267,9 +239,15 @@ fn run_setup_wizard() -> bool {
         print!("  {msg} {DIM}[{default}]{RESET}: ");
         io::stdout().flush().unwrap();
         let mut buf = String::new();
-        io::stdin().read_line(&mut buf).unwrap();
+        if io::stdin().read_line(&mut buf).is_err() {
+            return default.to_string();
+        }
         let val = buf.trim().to_string();
-        if val.is_empty() { default.to_string() } else { val }
+        if val.is_empty() {
+            default.to_string()
+        } else {
+            val
+        }
     }
 
     // ── Banner ──
@@ -277,200 +255,106 @@ fn run_setup_wizard() -> bool {
     println!("  {BOLD_GOLD} █████ ████  ██████   ████████    ███████  █████████  █████████{RESET}");
     println!("  {BOLD_GOLD} ░░███ ░███  ░░░░░███ ░░███░░███  ███░░███ ░█░░░░███  ░█░░░░███{RESET}");
     println!("  {BOLD_GOLD}  ░███ ░███   ███████  ░███ ░███ ░███ ░███ ░   ███░   ░   ███░{RESET}");
-    println!("  {BOLD_GOLD}  ░███ ░███  ███░░███  ░███ ░███ ░███ ░███   ███░   █   ███░   █{RESET}");
-    println!("  {BOLD_GOLD}  ░░███████ ░░████████ ████ █████░░███████  █████████  █████████{RESET}");
+    println!(
+        "  {BOLD_GOLD}  ░███ ░███  ███░░███  ░███ ░███ ░███ ░███   ███░   █   ███░   █{RESET}"
+    );
+    println!(
+        "  {BOLD_GOLD}  ░░███████ ░░████████ ████ █████░░███████  █████████  █████████{RESET}"
+    );
     println!("  {BOLD_GOLD}   ░░░░░███  ░░░░░░░░ ░░░░ ░░░░░  ░░░░░███ ░░░░░░░░░  ░░░░░░░░░{RESET}");
     println!("  {BOLD_GOLD}   ███ ░███                       ███ ░███{RESET}");
     println!("  {BOLD_GOLD}  ░░██████                       ░░██████{RESET}");
     println!("  {BOLD_GOLD}   ░░░░░░                         ░░░░░░{RESET}");
     println!();
-    println!("  {BOLD}欢迎使用 yangzz！{RESET} {DIM}AI coding assistant — 多模型、多中转、开箱即用{RESET}");
+    println!(
+        "  {BOLD}欢迎使用 yangzz！{RESET} {DIM}下面 4 步给这份配置起名、填入口、填 Key、选模型。{RESET}"
+    );
     println!();
 
-    // ── Check env vars first ──
-    let env_keys = [
-        ("OPENAI_API_KEY", "openai", "https://api.openai.com", "gpt-4o"),
-        ("ANTHROPIC_API_KEY", "anthropic", "https://api.anthropic.com", "claude-sonnet-4-20250514"),
-        ("DEEPSEEK_API_KEY", "deepseek", "https://api.deepseek.com", "deepseek-chat"),
-        ("GEMINI_API_KEY", "gemini", "https://generativelanguage.googleapis.com", "gemini-2.5-pro"),
-    ];
-    for (env_var, name, _base, model) in &env_keys {
-        if let Ok(key) = std::env::var(env_var) {
-            if !key.is_empty() {
-                println!("  {GREEN}✓{RESET} 检测到环境变量 {BOLD}{env_var}{RESET}");
-                let choice = prompt_default(
-                    &format!("使用 {name} ({model}) 吗？(y/n)"),
-                    "y",
-                );
-                if choice.to_lowercase().starts_with('y') {
-                    println!();
-                    println!("  {GREEN}✓{RESET} 直接使用环境变量，无需额外配置！");
-                    println!();
-                    return true;
-                }
-            }
-        }
-    }
-
-    // ── Choose mode ──
-    println!("  ──────────────────");
-    println!();
-    println!("  {BOLD_GOLD}选择你的使用方式：{RESET}");
-    println!();
-    println!("    {GOLD}1{RESET}  中转站（有中转商给的 地址 + Key）  {DIM}← 最常见{RESET}");
-    println!("    {GOLD}2{RESET}  官方 API（直连 OpenAI / Anthropic 等）");
-    println!("    {GOLD}3{RESET}  本地 Ollama（免费、离线）");
-    println!();
-    let mode = prompt_default("请选择", "1");
-    println!();
-
-    let (provider_name, api_key, base_url, default_model, api_format);
-
-    match mode.as_str() {
-        "2" => {
-            // Official API
-            println!("  {BOLD_GOLD}官方 API 配置{RESET}");
-            println!();
-            println!("    {GOLD}1{RESET}  OpenAI (GPT-4o, GPT-5.4...)");
-            println!("    {GOLD}2{RESET}  Anthropic (Claude Sonnet, Opus...)");
-            println!("    {GOLD}3{RESET}  DeepSeek");
-            println!("    {GOLD}4{RESET}  Google Gemini");
-            println!();
-            let vendor = prompt_default("选择服务商", "1");
-            let (name, url, model, fmt) = match vendor.as_str() {
-                "2" => ("anthropic", "https://api.anthropic.com", "claude-sonnet-4-20250514", "anthropic"),
-                "3" => ("deepseek", "https://api.deepseek.com", "deepseek-chat", "openai"),
-                "4" => ("gemini", "https://generativelanguage.googleapis.com", "gemini-2.5-pro", "openai"),
-                _ => ("openai", "https://api.openai.com", "gpt-4o", "openai"),
-            };
-            println!();
-            api_key = prompt(&format!("{BOLD}请输入 API Key: {RESET}"));
-            if api_key.is_empty() {
-                println!("  {RED}✖{RESET} API Key 不能为空");
-                return false;
-            }
-            provider_name = name.to_string();
-            base_url = url.to_string();
-            default_model = prompt_default("默认模型", model);
-            api_format = fmt.to_string();
-        }
-        "3" => {
-            // Local Ollama
-            println!("  {BOLD_GOLD}Ollama 本地模型{RESET}");
-            println!();
-            provider_name = "ollama".to_string();
-            api_key = "ollama".to_string();
-            base_url = prompt_default("Ollama 地址", "http://localhost:11434");
-            default_model = prompt_default("默认模型", "llama3");
-            api_format = "openai".to_string();
-        }
-        _ => {
-            // Relay (most common)
-            println!("  {BOLD_GOLD}中转站配置{RESET}");
-            println!("  {DIM}（从你的中转商那里拿到 地址 和 Key）{RESET}");
-            println!();
-            api_key = prompt(&format!("{BOLD}请输入 API Key: {RESET}"));
-            if api_key.is_empty() {
-                println!("  {RED}✖{RESET} API Key 不能为空");
-                return false;
-            }
-            base_url = prompt(&format!("{BOLD}请输入中转地址: {RESET}"));
-            if base_url.is_empty() {
-                println!("  {RED}✖{RESET} 中转地址不能为空");
-                return false;
-            }
-            provider_name = "my-relay".to_string();
-            default_model = prompt_default("默认模型", "claude-sonnet-4-20250514");
-            // api_format is always openai for relays
-            api_format = "openai".to_string();
-            println!();
-            println!("  {DIM}提示: api_format 已自动设为 \"openai\"（国内中转站几乎都是 OpenAI 兼容协议，{RESET}");
-            println!("  {DIM}即使调 Claude / DeepSeek 也是这个格式）{RESET}");
-        }
-    }
-
-    // ── Write config file ──
-    let config_dir = if cfg!(target_os = "macos") {
-        dirs::data_dir().map(|d| d.join("yangzz"))
-    } else {
-        dirs::config_dir().map(|d| d.join("yangzz"))
-    };
-
-    let Some(dir) = config_dir else {
-        println!("  {RED}✖{RESET} 无法确定配置目录");
+    // ── 1. 给配置起名 ──
+    // provider 就是一个 profile 名，不是厂商。
+    let name = prompt_default("给这份配置起个名字", "my-relay");
+    if name.is_empty() {
         return false;
-    };
+    }
 
-    let config_path = dir.join("config.toml");
+    // ── 2. 入口地址 ──
+    // 允许带 path（例如 https://relay.example.com/antigravity）
+    let url = prompt(&format!(
+        "{BOLD}入口地址{RESET} {DIM}(含路径，如 https://api.example.com 或 https://relay.com/antigravity): {RESET}"
+    ));
+    if url.is_empty() {
+        println!("  {RED}✖{RESET} 入口地址不能为空");
+        return false;
+    }
 
-    // Check if config already exists
+    // ── 3. API Key ──
+    let key = prompt(&format!("{BOLD}API Key: {RESET}"));
+    if key.is_empty() {
+        println!("  {RED}✖{RESET} Key 不能为空");
+        return false;
+    }
+
+    // ── 4. 默认模型 ──
+    let model = prompt_default(
+        "默认模型 (要跟入口实际支持的模型名一致)",
+        "claude-sonnet-4-20250514",
+    );
+
+    // ── api_format：入口协议 ──
+    // 99% 的中转站都说 OpenAI 协议，默认就够。
+    // auto 表示「按 URL host 自动判断」—— 对官方域名有效，对自定义中转仍按 OpenAI。
+    // 如果你的中转只提供 Claude 原生 /v1/messages，进配置文件手动改成 "anthropic" 即可。
+    let api_format = "openai";
+
+    // ── Write config — unified ~/.yangzz/config.toml ──
+    yangzz_core::paths::ensure_yangzz_dir();
+    let dir = yangzz_core::paths::yangzz_dir();
+    let config_path = yangzz_core::paths::config_path();
+
     if config_path.exists() {
-        println!();
-        let overwrite = prompt_default(
-            &format!("{YELLOW}⚠{RESET}  配置文件已存在，是否覆盖？(y/n)"),
-            "n",
-        );
+        let overwrite = prompt_default(&format!("{YELLOW}⚠{RESET} 配置已存在，覆盖？(y/n)"), "n");
         if !overwrite.to_lowercase().starts_with('y') {
             println!("  已取消。");
             return false;
         }
     }
 
-    // Create directory
     if let Err(e) = std::fs::create_dir_all(&dir) {
         println!("  {RED}✖{RESET} 创建目录失败: {e}");
         return false;
     }
 
-    // Build TOML content
-    let toml_content = format!(
-        r#"provider = "{provider_name}"
-model = "{default_model}"
+    let toml = format!(
+        r#"provider = "{name}"
+model = "{model}"
 
 [[providers]]
-name = "{provider_name}"
-api_key = "{api_key}"
-base_url = "{base_url}"
-default_model = "{default_model}"
+name = "{name}"
+api_key = "{key}"
+base_url = "{url}"
+default_model = "{model}"
 api_format = "{api_format}"
 "#
     );
 
-    // Write file
-    if let Err(e) = std::fs::write(&config_path, &toml_content) {
-        println!("  {RED}✖{RESET} 写入配置失败: {e}");
+    if let Err(e) = std::fs::write(&config_path, &toml) {
+        println!("  {RED}✖{RESET} 写入失败: {e}");
         return false;
     }
 
     println!();
-    println!("  {GREEN}✓{RESET} 配置已写入: {BOLD}{}{RESET}", config_path.display());
+    println!(
+        "  {GREEN}✓{RESET} 配置已保存 {DIM}{}{RESET}",
+        config_path.display()
+    );
     println!();
-
-    // ── Validate connection ──
-    println!("  {DIM}验证连接中...{RESET}");
-
-    // Quick validation: try to create provider
-    let test_settings = Settings::load(CliOverrides::default());
-    match config::resolve_provider(&test_settings) {
-        Ok(p) => {
-            println!("  {GREEN}✓{RESET} Provider 创建成功: {BOLD}{}{RESET} → {}", p.name(), default_model);
-        }
-        Err(e) => {
-            println!("  {YELLOW}⚠{RESET} Provider 创建异常: {e}");
-            println!("    {DIM}配置已保存，可以稍后用 yangzz --doctor 排查{RESET}");
-        }
-    }
-
-    println!();
-    println!("  ──────────────────");
-    println!();
-    println!("  {BOLD_GOLD}配置完成！{RESET}");
-    println!();
-    println!("  {DIM}提示：{RESET}");
-    println!("    {DIM}• 对话中 /model 可切换模型{RESET}");
-    println!("    {DIM}• 在 config.toml 中添加更多 [[providers]] 配置多个中转{RESET}");
-    println!("    {DIM}• yangzz --guide 查看完整指南{RESET}");
-    println!("    {DIM}• yangzz --doctor 健康检查{RESET}");
+    println!("  {BOLD}下面几个命令马上就能用：{RESET}");
+    println!("    {GOLD}输入你的问题{RESET}       {DIM}直接打字，回车发送{RESET}");
+    println!("    {GOLD}/help{RESET}             {DIM}查看所有命令{RESET}");
+    println!("    {GOLD}/provider add{RESET}     {DIM}再加一个中转{RESET}");
+    println!("    {GOLD}/model{RESET}            {DIM}切换模型{RESET}");
+    println!("    {GOLD}/quit{RESET}             {DIM}退出{RESET}");
     println!();
 
     true
@@ -485,46 +369,45 @@ fn run_doctor() {
     println!();
 
     let mut passed = 0u32;
-    let mut warned = 0u32;
+    let warned = 0u32;
     let mut failed = 0u32;
 
-    // 1. Config file
+    // 1. Config file — unified ~/.yangzz/
     let settings = Settings::load(CliOverrides::default());
-    let config_path = if cfg!(target_os = "macos") {
-        dirs::data_dir().map(|d| d.join("yangzz").join("config.toml"))
-    } else if cfg!(target_os = "windows") {
-        dirs::config_dir().map(|d| d.join("yangzz").join("config.toml"))
-    } else {
-        dirs::config_dir().map(|d| d.join("yangzz").join("config.toml"))
-    };
+    let config_path = yangzz_core::paths::config_path();
 
-    if let Some(ref path) = config_path {
-        if path.exists() {
-            println!("  {GREEN}✓{RESET} Config file: {}", path.display());
+    if config_path.exists() {
+        println!("  {GREEN}✓{RESET} Config file: {}", config_path.display());
+        passed += 1;
+    } else {
+        // Check project-local fallback
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let local = cwd.join(".yangzz.toml");
+        if local.exists() {
+            println!(
+                "  {GREEN}✓{RESET} Config file: {} (project-local)",
+                local.display()
+            );
             passed += 1;
         } else {
-            // Check project-local
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let local = cwd.join(".yangzz.toml");
-            if local.exists() {
-                println!("  {GREEN}✓{RESET} Config file: {} (project-local)", local.display());
-                passed += 1;
-            } else {
-                println!("  {RED}✖{RESET} Config file not found: {}", path.display());
-                println!("    {DIM}Run: yangzz --setup{RESET}");
-                failed += 1;
-            }
+            println!(
+                "  {RED}✖{RESET} Config file not found: {}",
+                config_path.display()
+            );
+            println!("    {DIM}Run: yangzz --setup{RESET}");
+            failed += 1;
         }
-    } else {
-        println!("  {YELLOW}⚠{RESET} Cannot determine config directory");
-        warned += 1;
     }
 
     // 2. Provider
     if settings.provider.is_some() {
         match config::resolve_provider(&settings) {
             Ok(p) => {
-                println!("  {GREEN}✓{RESET} Provider: {} ({})", p.name(), settings.resolved_model());
+                println!(
+                    "  {GREEN}✓{RESET} Provider: {} ({})",
+                    p.name(),
+                    settings.resolved_model()
+                );
                 passed += 1;
             }
             Err(e) => {
@@ -540,10 +423,22 @@ fn run_doctor() {
 
     // 3. API Key
     if settings.api_key.is_some() || !settings.providers.is_empty() {
-        let has_key = settings.api_key.is_some()
-            || settings.providers.iter().any(|p| !p.api_key.is_empty());
+        let has_key =
+            settings.api_key.is_some() || settings.providers.iter().any(|p| !p.api_key.is_empty());
+        let active = settings.provider.as_deref().unwrap_or("");
+        let allows_keyless = settings
+            .providers
+            .iter()
+            .any(|p| p.name.eq_ignore_ascii_case(active) && p.api_key.is_empty())
+            || config::PRESETS.iter().any(|preset| {
+                preset.name.eq_ignore_ascii_case(active) && preset.api_key_env.is_empty()
+            });
+
         if has_key {
             println!("  {GREEN}✓{RESET} API key configured");
+            passed += 1;
+        } else if allows_keyless {
+            println!("  {GREEN}✓{RESET} Current provider does not require an API key");
             passed += 1;
         } else {
             println!("  {RED}✖{RESET} No API key found");
@@ -551,7 +446,12 @@ fn run_doctor() {
         }
     } else {
         // Check env vars
-        let env_keys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "DEEPSEEK_API_KEY"];
+        let env_keys = [
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GEMINI_API_KEY",
+            "DEEPSEEK_API_KEY",
+        ];
         let has_env = env_keys.iter().any(|k| std::env::var(k).is_ok());
         if has_env {
             println!("  {GREEN}✓{RESET} API key (from environment variable)");
@@ -563,12 +463,27 @@ fn run_doctor() {
     }
 
     // 4. Extra providers
-    let provider_count = settings.providers.len();
+    let mut unique_providers = Vec::new();
+    for ep in &settings.providers {
+        if unique_providers.iter().any(
+            |existing: &&yangzz_core::config::settings::ExtraProvider| {
+                existing.name.eq_ignore_ascii_case(&ep.name)
+            },
+        ) {
+            continue;
+        }
+        unique_providers.push(ep);
+    }
+
+    let provider_count = unique_providers.len();
     if provider_count > 0 {
         println!("  {GREEN}✓{RESET} Extra providers: {provider_count} configured");
-        for ep in &settings.providers {
+        for ep in unique_providers {
             let model = ep.default_model.as_deref().unwrap_or("(default)");
-            println!("    {DIM}• {} → {} [{}]{RESET}", ep.name, ep.base_url, model);
+            println!(
+                "    {DIM}• {} → {} [{}]{RESET}",
+                ep.name, ep.base_url, model
+            );
         }
         passed += 1;
     } else {
@@ -576,7 +491,10 @@ fn run_doctor() {
     }
 
     // 5. Rust toolchain
-    let has_cargo = std::process::Command::new("cargo").arg("--version").output().is_ok();
+    let has_cargo = std::process::Command::new("cargo")
+        .arg("--version")
+        .output()
+        .is_ok();
     if has_cargo {
         println!("  {GREEN}✓{RESET} Rust toolchain available");
         passed += 1;
@@ -589,8 +507,14 @@ fn run_doctor() {
     let has_git = cwd.join(".git").exists();
     let has_memory = cwd.join("MEMORY.md").exists();
     println!("  {DIM}─{RESET} Working dir: {}", cwd.display());
-    if has_git { println!("    {GREEN}✓{RESET} Git repo detected"); passed += 1; }
-    if has_memory { println!("    {GREEN}✓{RESET} MEMORY.md found"); passed += 1; }
+    if has_git {
+        println!("    {GREEN}✓{RESET} Git repo detected");
+        passed += 1;
+    }
+    if has_memory {
+        println!("    {GREEN}✓{RESET} MEMORY.md found");
+        passed += 1;
+    }
 
     // 7. Shell (Windows check)
     if cfg!(target_os = "windows") {
@@ -605,10 +529,115 @@ fn run_doctor() {
     // Summary
     println!();
     if failed == 0 {
-        println!("  {GREEN}■{RESET} {BOLD}All checks passed{RESET} ({passed} ok, {warned} warnings)");
+        println!(
+            "  {GREEN}■{RESET} {BOLD}All checks passed{RESET} ({passed} ok, {warned} warnings)"
+        );
     } else {
-        println!("  {RED}■{RESET} {BOLD}{failed} issue(s) found{RESET} ({passed} ok, {warned} warnings)");
+        println!(
+            "  {RED}■{RESET} {BOLD}{failed} issue(s) found{RESET} ({passed} ok, {warned} warnings)"
+        );
         println!("    {DIM}Fix the issues above, then run 'yangzz --doctor' again{RESET}");
     }
+    println!();
+}
+
+// ── `yangzz --where` ──
+// Prints every yangzz data path so users can inspect / manually clean.
+
+fn print_where() {
+    println!();
+    println!("  {BOLD}yangzz 数据位置{RESET}");
+    println!("  ══════════════════════════");
+    println!();
+    println!("  {BOLD}主目录：{RESET}");
+    println!(
+        "    {GOLD}{}{RESET}",
+        yangzz_core::paths::yangzz_dir().display()
+    );
+    println!();
+    println!("  {BOLD}详细文件：{RESET}");
+    for (label, path, exists) in yangzz_core::paths::all_paths_report() {
+        let mark = if exists {
+            format!("{GREEN}✓{RESET}")
+        } else {
+            format!("{DIM}─{RESET}")
+        };
+        println!("    {mark} {:<14} {DIM}{}{RESET}", label, path.display());
+    }
+    println!();
+    println!("  {BOLD}完全卸载 yangzz:{RESET}");
+    println!("    {GOLD}yangzz --uninstall{RESET}      {DIM}交互式清理 + 卸载提示{RESET}");
+    println!();
+}
+
+// ── `yangzz --uninstall` ──
+// Interactive uninstall: asks whether to wipe user data, then tells the user
+// how to remove the binary (we can't reliably self-delete on all platforms).
+
+fn run_uninstall() {
+    use std::io::{self, Write};
+
+    fn prompt(msg: &str) -> String {
+        print!("  {msg}");
+        io::stdout().flush().unwrap();
+        let mut buf = String::new();
+        if io::stdin().read_line(&mut buf).is_err() {
+            return String::new();
+        }
+        buf.trim().to_string()
+    }
+
+    println!();
+    println!("  {BOLD}yangzz --uninstall{RESET}");
+    println!("  ══════════════════════════");
+    println!();
+
+    // Step 1: show what's there
+    let report = yangzz_core::paths::all_paths_report();
+    let any_exists = report.iter().any(|(_, _, e)| *e);
+
+    if any_exists {
+        println!("  {BOLD}检测到以下 yangzz 数据：{RESET}");
+        for (label, path, exists) in &report {
+            if *exists {
+                println!(
+                    "    {RED}•{RESET} {:<14} {DIM}{}{RESET}",
+                    label,
+                    path.display()
+                );
+            }
+        }
+        println!();
+
+        let choice = prompt(&format!(
+            "{BOLD}要删除这些数据吗？{RESET} {DIM}[y=全删 / n=保留 / Enter=默认保留]{RESET}: "
+        ));
+
+        if choice.to_lowercase().starts_with('y') {
+            let dir = yangzz_core::paths::yangzz_dir();
+            match std::fs::remove_dir_all(&dir) {
+                Ok(_) => println!("  {GREEN}✓{RESET} 已删除 {}", dir.display()),
+                Err(e) => println!("  {RED}✖{RESET} 删除失败: {e}"),
+            }
+        } else {
+            println!("  {DIM}─ 保留了你的 config / sessions / MEMORY.md{RESET}");
+            println!(
+                "    {DIM}以后想清：rm -rf {}{RESET}",
+                yangzz_core::paths::yangzz_dir().display()
+            );
+        }
+    } else {
+        println!("  {DIM}没有找到 yangzz 数据（已经很干净了）。{RESET}");
+    }
+
+    // Step 2: tell them how to remove the binary
+    println!();
+    println!("  {BOLD}最后一步（删二进制）yangzz 自己不能删自己，请选一条：{RESET}");
+    println!();
+    println!("    {GOLD}npm:{RESET}   npm uninstall -g yangzz");
+    println!("    {GOLD}cargo:{RESET} cargo uninstall yangzz");
+    println!("    {GOLD}手动:{RESET} rm $(which yangzz)");
+    println!();
+    println!("  {DIM}再见 👋{RESET}");
     println!();
 }

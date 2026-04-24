@@ -1,3 +1,4 @@
+pub mod attach;
 pub mod config;
 pub mod hooks;
 pub mod mcp;
@@ -5,6 +6,7 @@ pub mod memory;
 pub mod message;
 pub mod migrate;
 pub mod pangu;
+pub mod paths;
 pub mod permission;
 pub mod plugin;
 pub mod provider;

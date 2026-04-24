@@ -1,12 +1,14 @@
 use crate::tool::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub struct FetchTool;
 
 #[async_trait]
 impl Tool for FetchTool {
-    fn name(&self) -> &str { "fetch" }
+    fn name(&self) -> &str {
+        "fetch"
+    }
 
     fn description(&self) -> &str {
         "Fetch content from a URL. Returns the text content of the response."
@@ -23,10 +25,13 @@ impl Tool for FetchTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: &Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let url = input["url"].as_str()
+        let url = input["url"]
+            .as_str()
             .ok_or_else(|| ToolError::Validation("Missing 'url'".into()))?;
 
         let client = reqwest::Client::builder()
@@ -34,11 +39,16 @@ impl Tool for FetchTool {
             .build()
             .map_err(|e| ToolError::Execution(format!("HTTP client error: {e}")))?;
 
-        let resp = client.get(url).send().await
+        let resp = client
+            .get(url)
+            .send()
+            .await
             .map_err(|e| ToolError::Execution(format!("Fetch failed: {e}")))?;
 
         let status = resp.status();
-        let body = resp.text().await
+        let body = resp
+            .text()
+            .await
             .map_err(|e| ToolError::Execution(format!("Cannot read body: {e}")))?;
 
         let mut result = body;

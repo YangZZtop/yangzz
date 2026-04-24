@@ -28,7 +28,11 @@ pub struct ToolExecutor {
 }
 
 impl ToolExecutor {
-    pub fn new(registry: ToolRegistry, permission: Arc<PermissionManager>, cwd: std::path::PathBuf) -> Self {
+    pub fn new(
+        registry: ToolRegistry,
+        permission: Arc<PermissionManager>,
+        cwd: std::path::PathBuf,
+    ) -> Self {
         let hook_list = hooks::load_hooks(&cwd);
         Self {
             registry,
@@ -56,8 +60,13 @@ impl ToolExecutor {
             let input_hash = hash_value(input);
             let mut calls = self.recent_calls.lock().await;
             calls.push_back((name.to_string(), input_hash));
-            if calls.len() > 20 { calls.pop_front(); }
-            let repeat_count = calls.iter().filter(|(n, h)| n == name && *h == input_hash).count();
+            if calls.len() > 20 {
+                calls.pop_front();
+            }
+            let repeat_count = calls
+                .iter()
+                .filter(|(n, h)| n == name && *h == input_hash)
+                .count();
             if repeat_count >= 3 {
                 warn!("Tool loop detected: {name} called {repeat_count} times with same input");
                 return ToolOutput::error(format!(
@@ -68,7 +77,11 @@ impl ToolExecutor {
 
         // 3. Permission check
         if !tool.is_read_only() {
-            match self.permission.check(name, input, tool.is_destructive()).await {
+            match self
+                .permission
+                .check(name, input, tool.is_destructive())
+                .await
+            {
                 Ok(true) => {} // allowed
                 Ok(false) => {
                     info!("Tool {name} denied by user");
@@ -81,21 +94,23 @@ impl ToolExecutor {
         }
 
         // 4. Pre-execute: save undo state for write tools
-        if matches!(name, "file_edit" | "file_write" | "multi_edit" | "file_append" | "notebook_edit") {
+        if matches!(
+            name,
+            "file_edit" | "file_write" | "multi_edit" | "file_append" | "notebook_edit"
+        ) {
             if let Some(path) = input.get("path").and_then(|v| v.as_str()) {
-                let full_path = if std::path::Path::new(path).is_absolute() {
-                    std::path::PathBuf::from(path)
-                } else {
-                    self.ctx.cwd.join(path)
-                };
-                if let Ok(old_content) = tokio::fs::read_to_string(&full_path).await {
-                    let mut stack = self.undo_stack.lock().await;
-                    stack.push_back(UndoEntry {
-                        path: full_path.to_string_lossy().to_string(),
-                        old_content,
-                        tool_name: name.to_string(),
-                    });
-                    if stack.len() > 20 { stack.pop_front(); }
+                if let Ok(full_path) = self.ctx.resolve_path_for_write(path) {
+                    if let Ok(old_content) = tokio::fs::read_to_string(&full_path).await {
+                        let mut stack = self.undo_stack.lock().await;
+                        stack.push_back(UndoEntry {
+                            path: full_path.to_string_lossy().to_string(),
+                            old_content,
+                            tool_name: name.to_string(),
+                        });
+                        if stack.len() > 20 {
+                            stack.pop_front();
+                        }
+                    }
                 }
             }
         }
@@ -146,7 +161,10 @@ impl ToolExecutor {
                 redacted.push_str(w);
                 redacted.push('\n');
             }
-            return ToolOutput { content: redacted, is_error: output.is_error };
+            return ToolOutput {
+                content: redacted,
+                is_error: output.is_error,
+            };
         }
 
         output

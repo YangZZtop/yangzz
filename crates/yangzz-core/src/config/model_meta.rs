@@ -7,13 +7,13 @@
 pub struct ModelMeta {
     pub model_pattern: &'static str,
     pub display_name: &'static str,
-    pub context_window: u64,         // max input tokens
-    pub input_price: f64,            // $/1M input tokens
-    pub output_price: f64,           // $/1M output tokens
-    pub cache_write_price: Option<f64>,  // $/1M cached input write
-    pub cache_read_price: Option<f64>,   // $/1M cached input read
+    pub context_window: u64,            // max input tokens
+    pub input_price: f64,               // $/1M input tokens
+    pub output_price: f64,              // $/1M output tokens
+    pub cache_write_price: Option<f64>, // $/1M cached input write
+    pub cache_read_price: Option<f64>,  // $/1M cached input read
     pub supports_reasoning: bool,
-    pub reasoning_effort: Option<&'static str>,  // "low" / "medium" / "high"
+    pub reasoning_effort: Option<&'static str>, // "low" / "medium" / "high"
 }
 
 /// Known model metadata (sorted by provider, then model)
@@ -85,7 +85,6 @@ pub static MODEL_CATALOG: &[ModelMeta] = &[
         supports_reasoning: true,
         reasoning_effort: Some("medium"),
     },
-
     // ── Anthropic ──
     ModelMeta {
         model_pattern: "claude-sonnet-4",
@@ -131,7 +130,6 @@ pub static MODEL_CATALOG: &[ModelMeta] = &[
         supports_reasoning: false,
         reasoning_effort: None,
     },
-
     // ── Google Gemini ──
     ModelMeta {
         model_pattern: "gemini-2.5-pro",
@@ -166,7 +164,6 @@ pub static MODEL_CATALOG: &[ModelMeta] = &[
         supports_reasoning: false,
         reasoning_effort: None,
     },
-
     // ── DeepSeek ──
     ModelMeta {
         model_pattern: "deepseek-chat",
@@ -190,7 +187,6 @@ pub static MODEL_CATALOG: &[ModelMeta] = &[
         supports_reasoning: true,
         reasoning_effort: Some("high"),
     },
-
     // ── xAI Grok ──
     ModelMeta {
         model_pattern: "grok-3",

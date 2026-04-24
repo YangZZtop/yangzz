@@ -82,7 +82,12 @@ impl TaskQueue {
     }
 
     /// Enqueue a new task
-    pub async fn enqueue(&self, task_type: TaskType, description: &str, priority: TaskPriority) -> usize {
+    pub async fn enqueue(
+        &self,
+        task_type: TaskType,
+        description: &str,
+        priority: TaskPriority,
+    ) -> usize {
         let mut id_lock = self.next_id.lock().await;
         let id = *id_lock;
         *id_lock += 1;
@@ -98,7 +103,10 @@ impl TaskQueue {
 
         let mut tasks = self.tasks.lock().await;
         // Insert by priority
-        let pos = tasks.iter().position(|t| t.priority > priority).unwrap_or(tasks.len());
+        let pos = tasks
+            .iter()
+            .position(|t| t.priority > priority)
+            .unwrap_or(tasks.len());
         tasks.insert(pos, task);
 
         info!("Task #{id} enqueued: {description}");
@@ -135,7 +143,10 @@ impl TaskQueue {
     /// Cancel a pending task
     pub async fn cancel(&self, id: usize) -> bool {
         let mut tasks = self.tasks.lock().await;
-        if let Some(task) = tasks.iter_mut().find(|t| t.id == id && t.status == TaskStatus::Pending) {
+        if let Some(task) = tasks
+            .iter_mut()
+            .find(|t| t.id == id && t.status == TaskStatus::Pending)
+        {
             task.status = TaskStatus::Cancelled;
             true
         } else {
@@ -150,7 +161,12 @@ impl TaskQueue {
 
     /// Count pending tasks
     pub async fn pending_count(&self) -> usize {
-        self.tasks.lock().await.iter().filter(|t| t.status == TaskStatus::Pending).count()
+        self.tasks
+            .lock()
+            .await
+            .iter()
+            .filter(|t| t.status == TaskStatus::Pending)
+            .count()
     }
 
     /// Format task list for display
@@ -163,10 +179,18 @@ impl TaskQueue {
         for t in tasks.iter() {
             out.push_str(&format!(
                 "{} #{} [{}] ({:?}) {}\n",
-                t.status.emoji(), t.id, t.task_type.as_str(), t.priority, t.description
+                t.status.emoji(),
+                t.id,
+                t.task_type.as_str(),
+                t.priority,
+                t.description
             ));
             if let Some(ref result) = t.result {
-                let preview = if result.len() > 100 { &result[..100] } else { result };
+                let preview = if result.len() > 100 {
+                    &result[..100]
+                } else {
+                    result
+                };
                 out.push_str(&format!("   → {preview}\n"));
             }
         }

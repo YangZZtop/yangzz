@@ -1,12 +1,14 @@
 use crate::tool::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub struct FileWriteTool;
 
 #[async_trait]
 impl Tool for FileWriteTool {
-    fn name(&self) -> &str { "file_write" }
+    fn name(&self) -> &str {
+        "file_write"
+    }
 
     fn description(&self) -> &str {
         "Create a new file or overwrite an existing file with the given content."
@@ -29,7 +31,9 @@ impl Tool for FileWriteTool {
         })
     }
 
-    fn is_destructive(&self) -> bool { true }
+    fn is_destructive(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let path = input["path"]
@@ -39,16 +43,7 @@ impl Tool for FileWriteTool {
             .as_str()
             .ok_or_else(|| ToolError::Validation("Missing 'content' field".into()))?;
 
-        let full_path = if std::path::Path::new(path).is_absolute() {
-            std::path::PathBuf::from(path)
-        } else {
-            ctx.cwd.join(path)
-        };
-
-        // Symlink protection
-        if full_path.exists() && full_path.is_symlink() {
-            return Err(ToolError::Execution("Refusing to write through symlink".into()));
-        }
+        let full_path = ctx.resolve_path_for_write(path)?;
 
         // Create parent directories if needed
         if let Some(parent) = full_path.parent() {
@@ -57,11 +52,14 @@ impl Tool for FileWriteTool {
                 .map_err(|e| ToolError::Execution(format!("Cannot create directory: {e}")))?;
         }
 
-        tokio::fs::write(&full_path, content)
-            .await
-            .map_err(|e| ToolError::Execution(format!("Cannot write {}: {e}", full_path.display())))?;
+        tokio::fs::write(&full_path, content).await.map_err(|e| {
+            ToolError::Execution(format!("Cannot write {}: {e}", full_path.display()))
+        })?;
 
         let lines = content.lines().count();
-        Ok(ToolOutput::success(format!("Wrote {} ({lines} lines)", full_path.display())))
+        Ok(ToolOutput::success(format!(
+            "Wrote {} ({lines} lines)",
+            full_path.display()
+        )))
     }
 }

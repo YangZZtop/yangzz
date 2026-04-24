@@ -2,7 +2,6 @@
 ///
 /// Auto-detects from LANG / LC_ALL / LANGUAGE env vars.
 /// Usage: `t().welcome_back` or `t().help_title`
-
 use std::sync::OnceLock;
 
 static LOCALE: OnceLock<Lang> = OnceLock::new();
@@ -49,11 +48,11 @@ pub fn t() -> &'static Strings {
 pub struct Strings {
     // ── Banner ──
     pub tagline: &'static str,
-    pub welcome_back: &'static str,        // "欢迎回来"
-    pub welcome_back_user: &'static str,    // "欢迎回来，{}！" (use with format!)
+    pub welcome_back: &'static str,      // "欢迎回来"
+    pub welcome_back_user: &'static str, // "欢迎回来，{}！" (use with format!)
     pub banner_hint: &'static str,
     #[allow(dead_code)]
-    pub input_hint: &'static str,         // "Enter 发送 · Esc 退出"
+    pub input_hint: &'static str, // "Enter 发送 · Esc 退出"
 
     // ── Help ──
     pub help_title: &'static str,
@@ -75,7 +74,7 @@ pub struct Strings {
     pub fetching_models: &'static str,
     pub custom_model: &'static str,
     pub custom_model_prompt: &'static str,
-    pub history_kept: &'static str,         // "(对话历史已保留，共{}条…)"
+    pub history_kept: &'static str, // "(对话历史已保留，共{}条…)"
 
     // ── Commands ──
     pub conversation_cleared: &'static str,
@@ -87,7 +86,7 @@ pub struct Strings {
     pub switched_to: &'static str,
 
     // ── Status ──
-    pub cooked_for: &'static str,           // "⏱ 耗时 {}"
+    pub cooked_for: &'static str, // "⏱ 耗时 {}"
     pub tokens_label: &'static str,
 
     // ── Setup wizard ──
@@ -109,7 +108,7 @@ pub struct Strings {
 const ZH: Strings = Strings {
     tagline: "终端 AI 助手",
     welcome_back: "欢迎回来！",
-    welcome_back_user: "欢迎回来，",  // + user + "！"
+    welcome_back_user: "欢迎回来，", // + user + "！"
     banner_hint: "/help 查看命令 · /model 切换模型 · 直接输入开始对话",
     input_hint: "Enter 发送 · /help 帮助 · /quit 退出",
 
@@ -190,7 +189,7 @@ pub fn translate_skill_desc(name: &str, original: &str) -> String {
 const EN: Strings = Strings {
     tagline: "terminal ai assistant",
     welcome_back: "Welcome back!",
-    welcome_back_user: "Welcome back, ",  // + user + "!"
+    welcome_back_user: "Welcome back, ", // + user + "!"
     banner_hint: "/help for commands · /model to switch · type to chat",
     input_hint: "Enter to send · /help for help · /quit to exit",
 

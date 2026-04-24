@@ -26,6 +26,31 @@
 
 ## 🚀 快速开始
 
+### 小米（免 key）
+
+已验证可直接走 OpenAI 兼容接口，无需密钥。
+
+```toml
+provider = "xiaomi"
+model = "mimo-v2.5-pro"
+```
+
+如果你想按项目单独配置，也可以写：
+
+```toml
+provider = "xiaomi"
+model = "mimo-v2.5-pro"
+
+[[providers]]
+name = "xiaomi"
+api_key = ""
+base_url = "https://fufu.iqach.top/v1"
+default_model = "mimo-v2.5-pro"
+api_format = "openai"
+```
+
+`/model` 已可识别并切换 `mimo-*` 模型。
+
 ### 安装
 
 ```bash
@@ -185,12 +210,15 @@ api_format = "openai"                  # 绝大多数中转都是 openai 格式
 ### 启动
 
 ```bash
-yangzz                                 # 交互模式
+yangzz                                 # 默认 REPL（推荐）
 yangzz "fix the bug in src/main.rs"    # 单次执行
+yangzz --tui                           # 实验性全屏 TUI
 yangzz --guide                         # 查看完整指南
 yangzz --doctor                        # 健康检查（排查配置问题）
 ```
 
+> 💡 **默认是经典 REPL。** 保留原生终端滚动、复制、选择；`--tui` 仍可用，但当前是实验态。
+>
 > 💡 **首次运行没有配置？** yangzz 会自动显示配置向导，手把手教你。
 
 ---
@@ -449,9 +477,9 @@ yangzz/
 │   │   ├── task_queue.rs      # 任务队列
 │   │   └── session.rs         # 会话持久化
 │   └── yangzz/                # CLI 入口
-│       ├── main.rs            # --guide / --setup / REPL / TUI
-│       ├── repl.rs            # 交互式对话
-│       └── ui/                # 双语 UI + 金色主题
+│       ├── main.rs            # --guide / --setup / 默认 REPL / 实验 TUI
+│       ├── repl.rs            # 主产品交互路径
+│       └── ui/                # REPL UI + 金色主题
 ├── npm/                       # npm 发布包
 ├── sdk/
 │   ├── typescript/            # TypeScript SDK
@@ -463,7 +491,7 @@ yangzz/
 - **语言**：Rust（单二进制，启动 <100ms，内存 <20MB）
 - **异步**：Tokio
 - **HTTP**：reqwest + SSE 流式
-- **终端**：rustyline（输入）+ crossterm（TUI）
+- **终端**：rustyline（默认 REPL）+ crossterm / ratatui（实验 TUI）
 - **序列化**：serde + toml + serde_json
 - **安全**：regex 模式匹配 + 路径遍历防护
 

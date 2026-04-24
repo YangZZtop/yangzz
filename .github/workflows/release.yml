@@ -28,6 +28,9 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary: yangzz.exe
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            binary: yangzz.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -48,6 +51,15 @@ jobs:
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} --package yangzz
+
+      # macOS Sequoia (15+) silently blocks unsigned arm64 binaries — they hang
+      # on startup with no error. Ad-hoc codesigning makes the binary trusted
+      # locally without needing an Apple Developer account.
+      - name: Ad-hoc codesign (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          codesign --force --sign - "target/${{ matrix.target }}/release/${{ matrix.binary }}"
+          codesign -dv "target/${{ matrix.target }}/release/${{ matrix.binary }}" 2>&1 | head -5
 
       - name: Rename binary
         shell: bash

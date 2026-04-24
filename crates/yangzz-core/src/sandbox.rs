@@ -99,7 +99,12 @@ pub fn wrap_command_linux(cmd: &str, _cwd: &Path, _net_policy: &NetworkPolicy) -
 }
 
 /// Wrap a command with appropriate sandbox for the current OS
-pub fn wrap_command(cmd: &str, cwd: &Path, mode: SandboxMode, net_policy: &NetworkPolicy) -> String {
+pub fn wrap_command(
+    cmd: &str,
+    cwd: &Path,
+    mode: SandboxMode,
+    net_policy: &NetworkPolicy,
+) -> String {
     match mode {
         SandboxMode::Off => cmd.to_string(),
         SandboxMode::Warn => {
@@ -149,11 +154,15 @@ pub struct SandboxConfig {
 
 impl Default for SandboxConfig {
     fn default() -> Self {
-        Self { mode: "off".to_string() }
+        Self {
+            mode: "off".to_string(),
+        }
     }
 }
 
-fn default_sandbox_mode() -> String { "off".to_string() }
+fn default_sandbox_mode() -> String {
+    "off".to_string()
+}
 
 /// Network access policy
 #[derive(Debug, Deserialize, Clone)]
@@ -179,7 +188,9 @@ impl Default for NetworkPolicy {
     }
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// Filesystem access policy
 #[derive(Debug, Deserialize, Clone)]
@@ -226,7 +237,9 @@ impl Default for CommandPolicy {
     }
 }
 
-fn default_max_runtime() -> u64 { 300 }
+fn default_max_runtime() -> u64 {
+    300
+}
 
 impl Default for ExecutionPolicy {
     fn default() -> Self {
@@ -247,18 +260,16 @@ pub fn load_policy(cwd: &Path) -> ExecutionPolicy {
     }
 
     match std::fs::read_to_string(&policy_path) {
-        Ok(content) => {
-            match toml::from_str::<ExecutionPolicy>(&content) {
-                Ok(policy) => {
-                    info!("Loaded execution policy from {}", policy_path.display());
-                    policy
-                }
-                Err(e) => {
-                    warn!("Invalid policy.toml: {e}, using defaults");
-                    ExecutionPolicy::default()
-                }
+        Ok(content) => match toml::from_str::<ExecutionPolicy>(&content) {
+            Ok(policy) => {
+                info!("Loaded execution policy from {}", policy_path.display());
+                policy
             }
-        }
+            Err(e) => {
+                warn!("Invalid policy.toml: {e}, using defaults");
+                ExecutionPolicy::default()
+            }
+        },
         Err(e) => {
             warn!("Cannot read policy.toml: {e}");
             ExecutionPolicy::default()
@@ -278,7 +289,11 @@ pub fn check_command_policy(cmd: &str, policy: &CommandPolicy) -> Result<(), Str
     // If allowlist is set, command must match
     if !policy.allowed_commands.is_empty() {
         let cmd_name = cmd.split_whitespace().next().unwrap_or("");
-        if !policy.allowed_commands.iter().any(|a| cmd_name.starts_with(a)) {
+        if !policy
+            .allowed_commands
+            .iter()
+            .any(|a| cmd_name.starts_with(a))
+        {
             return Err(format!("Command not in allowlist: {cmd_name}"));
         }
     }

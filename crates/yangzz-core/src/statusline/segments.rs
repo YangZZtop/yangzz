@@ -37,7 +37,9 @@ impl Segment for ModelSegment {
         })
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 // --- Git Segment ---
@@ -69,7 +71,9 @@ impl Segment for GitSegment {
         })
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
 // --- Context Window Segment ---
@@ -120,5 +124,7 @@ impl Segment for ContextSegment {
         })
     }
 
-    fn as_any_mut(&mut self) -> &mut dyn Any { self }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }

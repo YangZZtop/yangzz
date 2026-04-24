@@ -56,15 +56,33 @@ pub enum StopReason {
 /// Streaming events from the API
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
-    MessageStart { model: String },
-    ContentBlockStart { index: usize },
-    TextDelta { text: String },
-    ToolUseStart { id: String, name: String },
-    ToolInputDelta { partial_json: String },
-    ContentBlockStop { index: usize },
-    MessageDelta { stop_reason: StopReason, usage: Usage },
+    MessageStart {
+        model: String,
+    },
+    ContentBlockStart {
+        index: usize,
+    },
+    TextDelta {
+        text: String,
+    },
+    ToolUseStart {
+        id: String,
+        name: String,
+    },
+    ToolInputDelta {
+        partial_json: String,
+    },
+    ContentBlockStop {
+        index: usize,
+    },
+    MessageDelta {
+        stop_reason: StopReason,
+        usage: Usage,
+    },
     MessageStop,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 /// Provider errors

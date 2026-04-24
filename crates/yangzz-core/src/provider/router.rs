@@ -1,7 +1,7 @@
 //! Smart Model Router: automatically select the best model for a given task.
 //! Routes based on task complexity, cost, model capabilities, and user-defined strategy.
 
-use crate::config::settings::{StrategyConfig, StrategyRoles, StrategyKeywords};
+use crate::config::settings::{StrategyConfig, StrategyKeywords, StrategyRoles};
 use tracing::info;
 
 /// Task complexity classification
@@ -94,10 +94,21 @@ impl ModelRouter {
 
         // Complex indicators
         let complex_signals = [
-            "refactor", "architecture", "redesign", "migrate",
-            "implement all", "build a", "create a system",
-            "multi-file", "across the codebase", "全部", "整体",
-            "重构", "架构", "系统设计", "所有文件",
+            "refactor",
+            "architecture",
+            "redesign",
+            "migrate",
+            "implement all",
+            "build a",
+            "create a system",
+            "multi-file",
+            "across the codebase",
+            "全部",
+            "整体",
+            "重构",
+            "架构",
+            "系统设计",
+            "所有文件",
         ];
         for signal in &complex_signals {
             if lower.contains(signal) {
@@ -107,9 +118,19 @@ impl ModelRouter {
 
         // Simple indicators
         let simple_signals = [
-            "hello", "hi", "help", "what is", "explain",
-            "format", "lint", "fix typo", "rename",
-            "你好", "解释", "什么是", "帮我看",
+            "hello",
+            "hi",
+            "help",
+            "what is",
+            "explain",
+            "format",
+            "lint",
+            "fix typo",
+            "rename",
+            "你好",
+            "解释",
+            "什么是",
+            "帮我看",
         ];
         for signal in &simple_signals {
             if lower.contains(signal) {
@@ -132,10 +153,16 @@ impl ModelRouter {
         let complexity = self.classify_task(input);
 
         // Find best matching tier that's available
-        let best = self.tiers.iter()
+        let best = self
+            .tiers
+            .iter()
             .filter(|t| t.complexity == complexity)
             .filter(|t| available_providers.contains(&t.provider.as_str()))
-            .min_by(|a, b| a.cost_per_1k_input.partial_cmp(&b.cost_per_1k_input).unwrap());
+            .min_by(|a, b| {
+                a.cost_per_1k_input
+                    .partial_cmp(&b.cost_per_1k_input)
+                    .unwrap()
+            });
 
         // Fallback: any available model
         let decision = match best {
@@ -149,13 +176,18 @@ impl ModelRouter {
             },
             None => {
                 // Use first available tier
-                let fallback = self.tiers.iter()
+                let fallback = self
+                    .tiers
+                    .iter()
                     .find(|t| available_providers.contains(&t.provider.as_str()))
                     .map(|t| t.name.clone())
                     .unwrap_or_else(|| "gpt-4o".to_string());
                 RouteDecision {
                     model: fallback.clone(),
-                    reason: format!("No matching tier for {:?}, using fallback: {}", complexity, fallback),
+                    reason: format!(
+                        "No matching tier for {:?}, using fallback: {}",
+                        complexity, fallback
+                    ),
                     complexity,
                 }
             }
@@ -268,7 +300,11 @@ impl StrategyRouter {
         let reason = format!(
             "Domain: {} → provider: {}",
             domain.as_str(),
-            if provider_name.is_empty() { "(default)" } else { &provider_name }
+            if provider_name.is_empty() {
+                "(default)"
+            } else {
+                &provider_name
+            }
         );
 
         info!("Strategy route: {}", reason);
@@ -286,23 +322,51 @@ impl StrategyRouter {
         let lower = input.to_lowercase();
 
         // Check for multi-domain signals
-        let has_frontend = self.keywords.frontend.iter().any(|k| lower.contains(&k.to_lowercase()));
-        let has_backend = self.keywords.backend.iter().any(|k| lower.contains(&k.to_lowercase()));
-        let has_test = self.keywords.test.iter().any(|k| lower.contains(&k.to_lowercase()));
-        let has_review = self.keywords.review.iter().any(|k| lower.contains(&k.to_lowercase()));
-        let has_planner = self.keywords.planner.iter().any(|k| lower.contains(&k.to_lowercase()));
+        let has_frontend = self
+            .keywords
+            .frontend
+            .iter()
+            .any(|k| lower.contains(&k.to_lowercase()));
+        let has_backend = self
+            .keywords
+            .backend
+            .iter()
+            .any(|k| lower.contains(&k.to_lowercase()));
+        let has_test = self
+            .keywords
+            .test
+            .iter()
+            .any(|k| lower.contains(&k.to_lowercase()));
+        let has_review = self
+            .keywords
+            .review
+            .iter()
+            .any(|k| lower.contains(&k.to_lowercase()));
+        let has_planner = self
+            .keywords
+            .planner
+            .iter()
+            .any(|k| lower.contains(&k.to_lowercase()));
 
         // If it touches multiple domains, decompose
         let domain_count = [has_frontend, has_backend, has_test, has_review, has_planner]
-            .iter().filter(|&&x| x).count();
+            .iter()
+            .filter(|&&x| x)
+            .count();
 
         if domain_count >= 2 {
             // Multi-domain task: decompose
             if has_planner {
-                tasks.push((TaskDomain::Planner, format!("Plan the overall approach: {input}")));
+                tasks.push((
+                    TaskDomain::Planner,
+                    format!("Plan the overall approach: {input}"),
+                ));
             }
             if has_frontend {
-                tasks.push((TaskDomain::Frontend, format!("Handle frontend work: {input}")));
+                tasks.push((
+                    TaskDomain::Frontend,
+                    format!("Handle frontend work: {input}"),
+                ));
             }
             if has_backend {
                 tasks.push((TaskDomain::Backend, format!("Handle backend work: {input}")));
@@ -346,7 +410,7 @@ impl StrategyRouter {
 /// A single role assignment parsed from natural language
 #[derive(Debug, Clone)]
 pub struct RoleDirective {
-    pub model_hint: String,     // "claude", "gpt", "gemini", "deepseek", etc.
+    pub model_hint: String, // "claude", "gpt", "gemini", "deepseek", etc.
     pub domain: TaskDomain,
 }
 
@@ -381,31 +445,68 @@ pub fn parse_directives(input: &str) -> DirectiveParseResult {
 
     // Domain patterns (Chinese + English)
     let domain_patterns: &[(&[&str], TaskDomain)] = &[
-        (&["前端", "frontend", "ui", "页面", "组件", "css", "react", "vue"], TaskDomain::Frontend),
-        (&["后端", "backend", "api", "接口", "服务", "server", "数据库", "database"], TaskDomain::Backend),
+        (
+            &[
+                "前端", "frontend", "ui", "页面", "组件", "css", "react", "vue",
+            ],
+            TaskDomain::Frontend,
+        ),
+        (
+            &[
+                "后端",
+                "backend",
+                "api",
+                "接口",
+                "服务",
+                "server",
+                "数据库",
+                "database",
+            ],
+            TaskDomain::Backend,
+        ),
         (&["测试", "test", "spec", "单测"], TaskDomain::Test),
-        (&["审查", "review", "检查", "code review", "cr"], TaskDomain::Review),
-        (&["架构", "设计", "规划", "plan", "architect", "design"], TaskDomain::Planner),
+        (
+            &["审查", "review", "检查", "code review", "cr"],
+            TaskDomain::Review,
+        ),
+        (
+            &["架构", "设计", "规划", "plan", "architect", "design"],
+            TaskDomain::Planner,
+        ),
     ];
 
     // Assignment verb patterns
     let assign_verbs = [
-        "负责", "写", "做", "搞", "处理", "管",
-        "for", "handle", "do", "work on", "take care of",
-        "来", "去",
+        "负责",
+        "写",
+        "做",
+        "搞",
+        "处理",
+        "管",
+        "for",
+        "handle",
+        "do",
+        "work on",
+        "take care of",
+        "来",
+        "去",
     ];
 
     // Strategy: find "model + verb + domain" or "用model + verb + domain" patterns
     // Split by common delimiters
     let segments: Vec<&str> = lower
-        .split(|c: char| c == '，' || c == ',' || c == '、' || c == '；' || c == ';' || c == '。' || c == '.')
+        .split(|c: char| {
+            c == '，' || c == ',' || c == '、' || c == '；' || c == ';' || c == '。' || c == '.'
+        })
         .collect();
 
     let mut directive_spans: Vec<(usize, usize)> = Vec::new(); // byte ranges to strip
 
     for segment in &segments {
         let seg = segment.trim();
-        if seg.is_empty() { continue; }
+        if seg.is_empty() {
+            continue;
+        }
 
         // Try to find a model mention
         let mut found_model: Option<&str> = None;
@@ -416,7 +517,9 @@ pub fn parse_directives(input: &str) -> DirectiveParseResult {
                     break;
                 }
             }
-            if found_model.is_some() { break; }
+            if found_model.is_some() {
+                break;
+            }
         }
 
         // Try to find a domain mention
@@ -428,7 +531,9 @@ pub fn parse_directives(input: &str) -> DirectiveParseResult {
                     break;
                 }
             }
-            if found_domain.is_some() { break; }
+            if found_domain.is_some() {
+                break;
+            }
         }
 
         // Check for assignment verb
@@ -470,11 +575,19 @@ pub fn parse_directives(input: &str) -> DirectiveParseResult {
             .replace(",,", ",")
             .trim_matches(|c: char| c == '，' || c == ',' || c == ' ' || c == '、')
             .to_string();
-        if result.is_empty() { input.to_string() } else { result }
+        if result.is_empty() {
+            input.to_string()
+        } else {
+            result
+        }
     };
 
     let has_directives = !directives.is_empty();
-    DirectiveParseResult { directives, task, has_directives }
+    DirectiveParseResult {
+        directives,
+        task,
+        has_directives,
+    }
 }
 
 /// Convert parsed directives into a StrategyConfig (for one-time use)

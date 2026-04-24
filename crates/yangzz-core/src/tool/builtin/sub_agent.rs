@@ -1,6 +1,6 @@
 use crate::tool::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// SubAgent tool: spawn a focused sub-task with its own context.
 /// The sub-agent runs as a separate agentic loop with a narrowed prompt.
@@ -8,7 +8,9 @@ pub struct SubAgentTool;
 
 #[async_trait]
 impl Tool for SubAgentTool {
-    fn name(&self) -> &str { "sub_agent" }
+    fn name(&self) -> &str {
+        "sub_agent"
+    }
 
     fn description(&self) -> &str {
         "Spawn a sub-agent to handle a focused sub-task. The sub-agent receives a task description and returns its result. Use this for complex tasks that benefit from decomposition."
@@ -31,10 +33,13 @@ impl Tool for SubAgentTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { false }
+    fn is_read_only(&self) -> bool {
+        false
+    }
 
     async fn execute(&self, input: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
-        let task = input["task"].as_str()
+        let task = input["task"]
+            .as_str()
             .ok_or_else(|| ToolError::Validation("Missing 'task'".into()))?;
         let extra_context = input["context"].as_str().unwrap_or("");
 
@@ -46,7 +51,11 @@ impl Tool for SubAgentTool {
              Working directory: {}\n\
              Do not ask for confirmation. Execute the task directly using available tools.\n\
              When done, summarize what you did.",
-            if extra_context.is_empty() { String::new() } else { format!("Context: {extra_context}\n") },
+            if extra_context.is_empty() {
+                String::new()
+            } else {
+                format!("Context: {extra_context}\n")
+            },
             ctx.cwd.display()
         );
 
@@ -63,7 +72,11 @@ impl Tool for SubAgentTool {
              Instructions: Focus exclusively on this sub-task. Use tools as needed. \
              When complete, summarize results and return to the main task.\n\
              \n--- Sub-agent system context ---\n{sub_prompt}",
-            if extra_context.is_empty() { String::new() } else { format!("Context: {extra_context}\n") }
+            if extra_context.is_empty() {
+                String::new()
+            } else {
+                format!("Context: {extra_context}\n")
+            }
         )))
     }
 }

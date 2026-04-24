@@ -14,6 +14,23 @@ pub const GOLD: &str = "\x1b[38;5;178m";
 pub const BOLD_GOLD: &str = "\x1b[1;38;5;178m";
 pub const SOFT_GOLD: &str = "\x1b[38;5;179m";
 
+// ── Neon palette (256-color high-saturation) ──
+// Used for role differentiation and visual punch in status bar / dividers.
+pub const NEON_PINK: &str = "\x1b[38;5;201m"; // #FF00FF — user
+pub const BOLD_NEON_PINK: &str = "\x1b[1;38;5;201m";
+pub const NEON_CYAN: &str = "\x1b[38;5;51m"; // #00FFFF — assistant
+pub const BOLD_NEON_CYAN: &str = "\x1b[1;38;5;51m";
+pub const NEON_GREEN: &str = "\x1b[38;5;46m"; // #00FF00 — success/tool
+pub const BOLD_NEON_GREEN: &str = "\x1b[1;38;5;46m";
+pub const NEON_YELLOW: &str = "\x1b[38;5;226m"; // #FFFF00 — info
+pub const BOLD_NEON_YELLOW: &str = "\x1b[1;38;5;226m";
+pub const NEON_ORANGE: &str = "\x1b[38;5;208m"; // #FF8700 — accent
+pub const BOLD_NEON_ORANGE: &str = "\x1b[1;38;5;208m";
+pub const NEON_VIOLET: &str = "\x1b[38;5;141m"; // #AF87FF — divider/decoration
+pub const BOLD_NEON_VIOLET: &str = "\x1b[1;38;5;141m";
+pub const NEON_BLUE: &str = "\x1b[38;5;39m"; // #00AFFF — links/hints
+pub const BOLD_NEON_BLUE: &str = "\x1b[1;38;5;39m";
+
 // ── Standard ANSI (fallback / semantic) ──
 pub const GREEN: &str = "\x1b[32m";
 pub const RED: &str = "\x1b[31m";
@@ -29,8 +46,24 @@ pub const BOLD_MAGENTA: &str = "\x1b[1;35m";
 pub const BOLD_BLUE: &str = "\x1b[1;34m";
 pub const BOLD_CYAN: &str = "\x1b[1;36m";
 pub const BG_DARK: &str = "\x1b[48;5;236m";
-pub const BG_INPUT: &str = "\x1b[48;5;235m";   // Slightly lighter dark bg for input line
-pub const CLEAR_LINE: &str = "\x1b[2K";        // Clear entire line
+pub const BG_INPUT: &str = "\x1b[48;5;235m"; // Slightly lighter dark bg for input line
+pub const CLEAR_LINE: &str = "\x1b[2K"; // Clear entire line
+
+/// Print a subtle horizontal divider — used between conversation turns so
+/// the scrollback reads as discrete cards without a heavy frame.
+///
+/// Style: neon violet gradient dots, width clamped to terminal.
+pub fn print_divider() {
+    let w = crossterm::terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(80);
+    let inner = w.saturating_sub(4).min(76);
+    // Alternating violet / dim rule for a subtle gradient feel
+    let rule: String = "─".repeat(inner);
+    println!();
+    println!("  {NEON_VIOLET}{DIM}{rule}{RESET}");
+    println!();
+}
 
 // ── Semantic aliases (use these in UI code) ──
 pub const ACCENT: &str = GOLD;

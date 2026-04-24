@@ -1,12 +1,14 @@
 use crate::tool::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 pub struct FileReadTool;
 
 #[async_trait]
 impl Tool for FileReadTool {
-    fn name(&self) -> &str { "file_read" }
+    fn name(&self) -> &str {
+        "file_read"
+    }
 
     fn description(&self) -> &str {
         "Read the contents of a file. Can read specific line ranges."
@@ -33,22 +35,20 @@ impl Tool for FileReadTool {
         })
     }
 
-    fn is_read_only(&self) -> bool { true }
+    fn is_read_only(&self) -> bool {
+        true
+    }
 
     async fn execute(&self, input: &Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let path = input["path"]
             .as_str()
             .ok_or_else(|| ToolError::Validation("Missing 'path' field".into()))?;
 
-        let full_path = if std::path::Path::new(path).is_absolute() {
-            std::path::PathBuf::from(path)
-        } else {
-            ctx.cwd.join(path)
-        };
+        let full_path = ctx.resolve_existing_path(path)?;
 
-        let content = tokio::fs::read_to_string(&full_path)
-            .await
-            .map_err(|e| ToolError::Execution(format!("Cannot read {}: {e}", full_path.display())))?;
+        let content = tokio::fs::read_to_string(&full_path).await.map_err(|e| {
+            ToolError::Execution(format!("Cannot read {}: {e}", full_path.display()))
+        })?;
 
         let lines: Vec<&str> = content.lines().collect();
         let total = lines.len();
@@ -77,7 +77,9 @@ impl Tool for FileReadTool {
         } else {
             result = format!("File: {} ({total} lines)\n{result}", full_path.display());
             if !has_range && total > 2000 {
-                result.push_str(&format!("\n... (showing first 2000 of {total} lines, use offset/limit for more)"));
+                result.push_str(&format!(
+                    "\n... (showing first 2000 of {total} lines, use offset/limit for more)"
+                ));
             }
         }
 

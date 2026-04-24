@@ -1,6 +1,6 @@
-use dialoguer::{theme::ColorfulTheme, Input, Select};
 use super::format::*;
 use super::i18n::t;
+use dialoguer::{Input, Select, theme::ColorfulTheme};
 
 /// A group of models from one provider
 pub struct ProviderModels {
@@ -20,7 +20,10 @@ pub fn select_model(
     println!();
     let s = t();
     println!("  {BOLD_GOLD}{}{RESET}", s.switch_model);
-    println!("  {DIM}{}: {BOLD}{current_model}{RESET}{DIM} via {current_provider}{RESET}", s.current_label);
+    println!(
+        "  {DIM}{}: {BOLD}{current_model}{RESET}{DIM} via {current_provider}{RESET}",
+        s.current_label
+    );
     println!();
 
     // (display_string, model_id, provider_name)
@@ -33,13 +36,21 @@ pub fn select_model(
             continue;
         }
         // Section header
-        let header = format!("  {BOLD_GOLD}── {} ──{RESET}", group.provider_name);
+        let header = format!(
+            "  {BOLD_GOLD}── {} ({}) ──{RESET}",
+            group.provider_name,
+            group.models.len()
+        );
         items.push(header);
         entries.push(("__header__".to_string(), group.provider_name.clone()));
 
         for m in &group.models {
             let is_cur = m == current_model && group.provider_name == current_provider;
-            let mark = if is_cur { format!(" {GREEN}✓{RESET}") } else { String::new() };
+            let mark = if is_cur {
+                format!(" {GREEN}✓{RESET}")
+            } else {
+                String::new()
+            };
             items.push(format!("    {m}{mark}"));
             if is_cur {
                 current_idx = Some(entries.len());
@@ -50,7 +61,10 @@ pub fn select_model(
 
     // If current model not in any list, prepend it
     if current_idx.is_none() && !current_model.is_empty() {
-        let line = format!("    {current_model} {GREEN}✓{RESET} {DIM}({0}){RESET}", s.current_label);
+        let line = format!(
+            "    {current_model} {GREEN}✓{RESET} {DIM}({0}){RESET}",
+            s.current_label
+        );
         items.insert(0, line);
         entries.insert(0, (current_model.to_string(), current_provider.to_string()));
         current_idx = Some(0);
@@ -86,7 +100,7 @@ pub fn select_model(
         if custom.is_empty() {
             return None;
         }
-        let provider = crate::repl::detect_provider_from_model(&custom)
+        let provider = yangzz_core::config::detect_provider_family(&custom)
             .unwrap_or(current_provider)
             .to_string();
         Some((custom, provider))

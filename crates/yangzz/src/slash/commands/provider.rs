@@ -62,7 +62,7 @@ impl SlashCommand for ProviderCommand {
     }
     fn detailed_help(&self) -> &'static str {
         "用法:\n\
-         \x20 /provider                      显示当前 + 用法\n\
+         \x20 /provider                      列出全部 + 显示当前 + 用法\n\
          \x20 /provider list                 列出全部\n\
          \x20 /provider add                  交互式添加\n\
          \x20 /provider remove <name>        删除\n\
@@ -77,7 +77,10 @@ impl SlashCommand for ProviderCommand {
         let rest = parts.next().unwrap_or("").trim();
 
         match sub {
-            "" => show_current_and_usage(ctx),
+            "" => {
+                list_providers(ctx);
+                show_current_and_usage(ctx);
+            }
             "list" | "ls" => list_providers(ctx),
             "add" => add_provider(),
             "remove" | "rm" | "delete" => {
@@ -223,7 +226,11 @@ fn switch_model(args: &str, ctx: &mut CommandContext) {
 fn add_provider() {
     let Some(answers) = Wizard::new("添加新 provider")
         .ask("配置名（唯一）", Some("my-relay-2"))
-        .ask("入口地址（含路径）", None)
+        .ask(
+            "协议（openai/anthropic/gemini/vertex/bedrock）",
+            Some("openai"),
+        )
+        .ask("入口地址（含路径；vertex/bedrock 可留空）", Some(""))
         .ask_secret_optional("API Key（可留空）")
         .ask("默认模型", Some("claude-sonnet-4-20250514"))
         .run()
@@ -231,12 +238,26 @@ fn add_provider() {
         return;
     };
 
+    let Some(api_format) = normalize_provider_api_format(&answers[1]) else {
+        emitln!(
+            "  {RED}✖{RESET} 不支持的协议：{}（可选：openai / anthropic / gemini / vertex / bedrock）",
+            answers[1]
+        );
+        return;
+    };
+
+    let base_url = answers[2].trim().to_string();
+    if base_url.is_empty() && !matches!(api_format.as_str(), "vertex" | "bedrock") {
+        emitln!("  {RED}✖{RESET} 入口地址不能为空（vertex / bedrock 可留空）");
+        return;
+    }
+
     let provider = ExtraProvider {
         name: answers[0].clone(),
-        base_url: answers[1].clone(),
-        api_key: answers[2].clone(),
-        default_model: Some(answers[3].clone()),
-        api_format: Some("openai".to_string()),
+        base_url,
+        api_key: answers[3].clone(),
+        default_model: Some(answers[4].clone()),
+        api_format: Some(api_format),
         thinking_budget: None,
         context_window: None,
         reasoning_effort: None,
@@ -255,6 +276,15 @@ fn add_provider() {
         Err(e) => {
             emitln!("  {RED}✖{RESET} 添加失败: {e}");
         }
+    }
+}
+
+fn normalize_provider_api_format(raw: &str) -> Option<String> {
+    let normalized = raw.trim().to_lowercase();
+    match normalized.as_str() {
+        "" => Some("openai".to_string()),
+        "openai" | "anthropic" | "gemini" | "vertex" | "bedrock" => Some(normalized),
+        _ => None,
     }
 }
 
@@ -383,7 +413,10 @@ fn mask_key(k: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelCommand, ProviderCommand, target_default_model_for_provider};
+    use super::{
+        ModelCommand, ProviderCommand, normalize_provider_api_format,
+        target_default_model_for_provider,
+    };
     use crate::slash::{CommandContext, Outcome, Registry, SlashCommand};
     use crate::ui::status::SessionStats;
     use std::sync::Arc;
@@ -481,6 +514,32 @@ mod tests {
         let model = target_default_model_for_provider(&settings, "xiaomi");
 
         assert_eq!(model.as_deref(), Some("mimo-v2.5-pro"));
+    }
+
+    #[test]
+    fn normalize_provider_api_format_supports_documented_drivers() {
+        assert_eq!(
+            normalize_provider_api_format("openai").as_deref(),
+            Some("openai")
+        );
+        assert_eq!(
+            normalize_provider_api_format("anthropic").as_deref(),
+            Some("anthropic")
+        );
+        assert_eq!(
+            normalize_provider_api_format("gemini").as_deref(),
+            Some("gemini")
+        );
+        assert_eq!(
+            normalize_provider_api_format("vertex").as_deref(),
+            Some("vertex")
+        );
+        assert_eq!(
+            normalize_provider_api_format("bedrock").as_deref(),
+            Some("bedrock")
+        );
+        assert_eq!(normalize_provider_api_format("").as_deref(), Some("openai"));
+        assert_eq!(normalize_provider_api_format("custom"), None);
     }
 
     fn extra_provider(name: &str, default_model: &str) -> ExtraProvider {

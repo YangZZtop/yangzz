@@ -22,6 +22,16 @@ regex = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 base64 = "0.22"
+sha2 = { workspace = true }
+hex = { workspace = true }
+rusqlite = { workspace = true }
+
+# CodeGraph (Phase 3): tree-sitter AST analysis
+tree-sitter = "0.24"
+tree-sitter-rust = "0.23"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.23"
+streaming-iterator = "0.1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

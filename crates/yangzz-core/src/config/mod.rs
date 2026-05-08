@@ -7,7 +7,8 @@ pub use presets::{PRESETS, ProviderPreset};
 pub use settings::Settings;
 
 use crate::provider::{
-    AnthropicProvider, ApiFormat, OpenAiCompatProvider, Provider, ProviderError,
+    AnthropicProvider, ApiFormat, BedrockProvider, OpenAiCompatProvider, Provider, ProviderError,
+    VertexProvider,
 };
 use std::sync::Arc;
 
@@ -17,10 +18,68 @@ pub struct AvailableProvider {
     pub provider: Arc<dyn Provider>,
 }
 
+fn resolve_driver(api_format: Option<&str>, provider_name: &str) -> String {
+    if let Some(fmt) = api_format {
+        let lower = fmt.to_lowercase();
+        if matches!(
+            lower.as_str(),
+            "openai" | "anthropic" | "gemini" | "vertex" | "bedrock"
+        ) {
+            return lower;
+        }
+    }
+
+    detect_provider_family(provider_name)
+        .unwrap_or("openai")
+        .to_string()
+}
+
+fn build_provider(
+    provider_name: &str,
+    api_key: &str,
+    base_url: &str,
+    model: Option<String>,
+    driver: &str,
+) -> Result<Arc<dyn Provider>, ProviderError> {
+    match driver {
+        "anthropic" => {
+            let provider =
+                AnthropicProvider::with_base_url_named(provider_name, api_key, base_url, model)?;
+            Ok(Arc::new(provider))
+        }
+        "vertex" => {
+            let provider = VertexProvider::from_env_with_model_named(provider_name, model)
+                .ok_or_else(|| {
+                    ProviderError::Auth(
+                    "Vertex credentials missing. Set GOOGLE_CLOUD_PROJECT + GOOGLE_ACCESS_TOKEN."
+                        .into(),
+                )
+                })?;
+            Ok(Arc::new(provider))
+        }
+        "bedrock" => {
+            let provider = BedrockProvider::from_env_with_model_named(provider_name, model)
+                .ok_or_else(|| {
+                    ProviderError::Auth(
+                    "Bedrock credentials missing. Set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY."
+                        .into(),
+                )
+                })?;
+            Ok(Arc::new(provider))
+        }
+        _ => {
+            let provider = OpenAiCompatProvider::new(provider_name, api_key, base_url, model)?;
+            Ok(Arc::new(provider))
+        }
+    }
+}
+
 /// Infer the provider family from a model id or provider-like alias.
 pub fn detect_provider_family(value: &str) -> Option<&'static str> {
     let lower = value.to_lowercase();
-    if lower.starts_with("claude") || lower == "anthropic" {
+    if lower == "vertex" || lower.contains('@') {
+        Some("vertex")
+    } else if lower.starts_with("claude") || lower == "anthropic" {
         Some("anthropic")
     } else if lower.starts_with("mimo") || lower == "xiaomi" || value == "小米" {
         Some("xiaomi")
@@ -33,6 +92,8 @@ pub fn detect_provider_family(value: &str) -> Option<&'static str> {
         Some("openai")
     } else if lower.starts_with("gemini") || lower == "gemini" {
         Some("gemini")
+    } else if lower == "bedrock" || lower.starts_with("anthropic.claude") {
+        Some("bedrock")
     } else if lower.starts_with("deepseek") || lower == "deepseek" {
         Some("deepseek")
     } else if lower.starts_with("glm") || lower == "glm" {
@@ -141,15 +202,24 @@ pub fn list_available_providers(
         if seen.contains(&extra.name) {
             continue;
         }
-        let fmt = extra.api_format.as_deref().unwrap_or("openai");
-        let provider: Option<Arc<dyn Provider>> = match fmt {
-            "anthropic" => AnthropicProvider::with_base_url(
+        let fmt = resolve_driver(extra.api_format.as_deref(), &extra.name);
+        let provider: Option<Arc<dyn Provider>> = match fmt.as_str() {
+            "anthropic" => AnthropicProvider::with_base_url_named(
+                &extra.name,
                 &extra.api_key,
                 &extra.base_url,
                 extra.default_model.clone(),
             )
             .ok()
             .map(|p| Arc::new(p) as Arc<dyn Provider>),
+            "vertex" => {
+                VertexProvider::from_env_with_model_named(&extra.name, extra.default_model.clone())
+            }
+            .map(|p| Arc::new(p) as Arc<dyn Provider>),
+            "bedrock" => {
+                BedrockProvider::from_env_with_model_named(&extra.name, extra.default_model.clone())
+                    .map(|p| Arc::new(p) as Arc<dyn Provider>)
+            }
             _ => OpenAiCompatProvider::new(
                 &extra.name,
                 &extra.api_key,
@@ -305,39 +375,22 @@ fn push_unique_model(models: &mut Vec<String>, model: String) {
 ///   4. Config file settings
 ///   5. Built-in presets
 pub fn resolve_provider(settings: &Settings) -> Result<Arc<dyn Provider>, ProviderError> {
-    let build_provider = |provider_name: &str,
-                          api_key: &str,
-                          base_url: &str,
-                          model: Option<String>,
-                          format: ApiFormat|
-     -> Result<Arc<dyn Provider>, ProviderError> {
-        match format {
-            ApiFormat::Anthropic => {
-                let provider = AnthropicProvider::with_base_url(api_key, base_url, model)?;
-                Ok(Arc::new(provider))
-            }
-            ApiFormat::OpenAi | ApiFormat::Gemini => {
-                let provider = OpenAiCompatProvider::new(provider_name, api_key, base_url, model)?;
-                Ok(Arc::new(provider))
-            }
-        }
-    };
-
     // First: try to match provider name against [[providers]] in config
     if let Some(ref provider_name) = settings.provider {
+        if provider_name.eq_ignore_ascii_case("vertex")
+            || provider_name.eq_ignore_ascii_case("bedrock")
+        {
+            return build_provider(provider_name, "", "", settings.model.clone(), provider_name);
+        }
+
         for extra in &settings.providers {
             if extra.name.eq_ignore_ascii_case(provider_name) {
-                let fmt = extra.api_format.as_deref().unwrap_or("openai");
+                let fmt = resolve_driver(extra.api_format.as_deref(), &extra.name);
                 let model = settings
                     .model
                     .clone()
                     .or_else(|| extra.default_model.clone());
-                let format = if fmt.eq_ignore_ascii_case("anthropic") {
-                    ApiFormat::Anthropic
-                } else {
-                    ApiFormat::OpenAi
-                };
-                return build_provider(&extra.name, &extra.api_key, &extra.base_url, model, format);
+                return build_provider(&extra.name, &extra.api_key, &extra.base_url, model, &fmt);
             }
         }
 
@@ -355,17 +408,12 @@ pub fn resolve_provider(settings: &Settings) -> Result<Arc<dyn Provider>, Provid
                         .model
                         .clone()
                         .or_else(|| extra.default_model.clone());
-                    let format = if fmt.eq_ignore_ascii_case("anthropic") {
-                        ApiFormat::Anthropic
-                    } else {
-                        ApiFormat::OpenAi
-                    };
                     return build_provider(
                         &extra.name,
                         &extra.api_key,
                         &extra.base_url,
                         model,
-                        format,
+                        &resolve_driver(Some(fmt), &extra.name),
                     );
                 }
             }
@@ -386,7 +434,17 @@ pub fn resolve_provider(settings: &Settings) -> Result<Arc<dyn Provider>, Provid
                     .model
                     .clone()
                     .or_else(|| Some(preset.default_model.to_string()));
-                return build_provider(preset.name, "", base_url, model, preset.api_format);
+                return build_provider(
+                    preset.name,
+                    "",
+                    base_url,
+                    model,
+                    match preset.api_format {
+                        ApiFormat::Anthropic => "anthropic",
+                        ApiFormat::OpenAi => "openai",
+                        ApiFormat::Gemini => "gemini",
+                    },
+                );
             }
         }
 
@@ -399,23 +457,22 @@ pub fn resolve_provider(settings: &Settings) -> Result<Arc<dyn Provider>, Provid
                 "",
                 url,
                 model,
-                settings.resolved_api_format(),
+                match settings.resolved_api_format() {
+                    ApiFormat::Anthropic => "anthropic",
+                    ApiFormat::OpenAi => "openai",
+                    ApiFormat::Gemini => "gemini",
+                },
             );
         }
 
         // If no explicit key but we have providers in config, use the first one
         if let Some(first) = settings.providers.first() {
-            let fmt = first.api_format.as_deref().unwrap_or("openai");
+            let fmt = resolve_driver(first.api_format.as_deref(), &first.name);
             let model = settings
                 .model
                 .clone()
                 .or_else(|| first.default_model.clone());
-            let format = if fmt.eq_ignore_ascii_case("anthropic") {
-                ApiFormat::Anthropic
-            } else {
-                ApiFormat::OpenAi
-            };
-            return build_provider(&first.name, &first.api_key, &first.base_url, model, format);
+            return build_provider(&first.name, &first.api_key, &first.base_url, model, &fmt);
         }
         return Err(ProviderError::Auth(
             "No API key found. Set YANGZZ_API_KEY or configure [[providers]] in config.toml."
@@ -429,10 +486,11 @@ pub fn resolve_provider(settings: &Settings) -> Result<Arc<dyn Provider>, Provid
 
     match format {
         ApiFormat::Anthropic => {
+            let provider_name = settings.resolved_provider_name();
             let provider = if let Some(ref url) = base_url {
-                AnthropicProvider::with_base_url(api_key, url, model)?
+                AnthropicProvider::with_base_url_named(&provider_name, api_key, url, model)?
             } else {
-                AnthropicProvider::new(api_key, model)?
+                AnthropicProvider::new_named(&provider_name, api_key, model)?
             };
             Ok(Arc::new(provider))
         }
@@ -448,8 +506,8 @@ pub fn resolve_provider(settings: &Settings) -> Result<Arc<dyn Provider>, Provid
 #[cfg(test)]
 mod tests {
     use super::{
-        Settings, detect_provider_family, fallback_models_for_provider,
-        list_available_providers, resolve_provider, retain_configured_providers,
+        Settings, detect_provider_family, fallback_models_for_provider, list_available_providers,
+        resolve_driver, resolve_provider, retain_configured_providers,
         select_provider_name_for_model,
     };
     use crate::config::settings::ExtraProvider;
@@ -460,9 +518,25 @@ mod tests {
         assert_eq!(detect_provider_family("mimo-v2.5-pro"), Some("xiaomi"));
         assert_eq!(detect_provider_family("gpt-4o"), Some("openai"));
         assert_eq!(detect_provider_family("gemini-2.5-pro"), Some("gemini"));
+        assert_eq!(
+            detect_provider_family("anthropic.claude-3-5-sonnet-20241022-v2:0"),
+            Some("bedrock")
+        );
+        assert_eq!(
+            detect_provider_family("claude-3-5-sonnet-v2@20241022"),
+            Some("vertex")
+        );
         assert_eq!(detect_provider_family("deepseek-chat"), Some("deepseek"));
         assert_eq!(detect_provider_family("qwen2.5"), Some("ollama"));
         assert_eq!(detect_provider_family("mystery-model"), None);
+    }
+
+    #[test]
+    fn resolve_driver_understands_provider_specific_formats() {
+        assert_eq!(resolve_driver(Some("vertex"), "custom"), "vertex");
+        assert_eq!(resolve_driver(Some("bedrock"), "custom"), "bedrock");
+        assert_eq!(resolve_driver(None, "vertex"), "vertex");
+        assert_eq!(resolve_driver(None, "bedrock"), "bedrock");
     }
 
     #[test]
@@ -512,6 +586,24 @@ mod tests {
 
         assert_eq!(provider.name(), "xiaomi");
         assert_eq!(provider.default_model(), "mimo-v2.5-pro");
+    }
+
+    #[test]
+    fn resolve_provider_preserves_custom_name_for_anthropic_driver() {
+        let settings = Settings {
+            provider: Some("claude-relay".into()),
+            providers: vec![extra_provider(
+                "claude-relay",
+                "claude-sonnet-4-20250514",
+                "anthropic",
+            )],
+            ..Settings::default()
+        };
+
+        let provider = resolve_provider(&settings).unwrap();
+
+        assert_eq!(provider.name(), "claude-relay");
+        assert_eq!(provider.default_model(), "claude-sonnet-4-20250514");
     }
 
     #[test]

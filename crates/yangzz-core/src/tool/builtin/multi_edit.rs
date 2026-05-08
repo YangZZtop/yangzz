@@ -48,7 +48,7 @@ impl Tool for MultiEditTool {
             .as_array()
             .ok_or_else(|| ToolError::Validation("Missing 'edits' array".into()))?;
 
-        let full_path = ctx.resolve_existing_path(path)?;
+        let full_path = ctx.resolve_existing_path_for_write(path)?;
 
         let mut content = tokio::fs::read_to_string(&full_path).await.map_err(|e| {
             ToolError::Execution(format!("Cannot read {}: {e}", full_path.display()))

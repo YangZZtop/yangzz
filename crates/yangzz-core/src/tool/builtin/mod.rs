@@ -1,5 +1,6 @@
 mod ask_user;
 mod bash;
+mod code_graph;
 mod fetch;
 mod file_append;
 mod file_edit;
@@ -17,6 +18,7 @@ mod tree;
 
 pub use ask_user::AskUserTool;
 pub use bash::BashTool;
+pub use code_graph::CodeGraphTool;
 pub use fetch::FetchTool;
 pub use file_append::FileAppendTool;
 pub use file_edit::FileEditTool;

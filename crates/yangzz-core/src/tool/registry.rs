@@ -35,6 +35,7 @@ impl ToolRegistry {
         registry.register(Arc::new(super::builtin::SubAgentTool));
         registry.register(Arc::new(super::builtin::TodoTool));
         registry.register(Arc::new(super::builtin::ParallelEditTool));
+        registry.register(Arc::new(super::builtin::CodeGraphTool));
         registry
     }
 

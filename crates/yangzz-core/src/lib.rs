@@ -1,5 +1,7 @@
 pub mod attach;
+pub mod codegraph;
 pub mod config;
+pub mod db;
 pub mod hooks;
 pub mod mcp;
 pub mod memory;

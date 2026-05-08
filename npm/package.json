@@ -1,12 +1,26 @@
 {
   "name": "yangzz",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "AI coding assistant — any model, one variable, ready to go",
   "bin": {
     "yangzz": "bin/yangzz.js"
   },
+  "files": [
+    "README.md",
+    "bin",
+    "package.json",
+    "platforms.js"
+  ],
+  "optionalDependencies": {
+    "@yangzz123/yangzz-darwin-arm64": "0.3.2",
+    "@yangzz123/yangzz-darwin-x64": "0.3.2",
+    "@yangzz123/yangzz-linux-arm64-gnu": "0.3.2",
+    "@yangzz123/yangzz-linux-x64-gnu": "0.3.2",
+    "@yangzz123/yangzz-win32-arm64-msvc": "0.3.2",
+    "@yangzz123/yangzz-win32-x64-msvc": "0.3.2"
+  },
   "scripts": {
-    "postinstall": "node install.js"
+    "prepare:platform-packages": "node scripts/prepare-platform-packages.js"
   },
   "keywords": [
     "ai",

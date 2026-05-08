@@ -27,6 +27,8 @@ pub fn register_all(r: &mut Registry) {
     r.register(Box::new(conversation::CompactCommand));
     r.register(Box::new(conversation::MemoryCommand));
     r.register(Box::new(conversation::RecallCommand));
+    r.register(Box::new(conversation::ResumeCommand));
+    r.register(Box::new(conversation::HistoryCommand));
     r.register(Box::new(mcp::McpCommand));
     r.register(Box::new(task::TaskCommand));
     r.register(Box::new(task::RouteCommand));

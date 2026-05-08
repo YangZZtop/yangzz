@@ -40,15 +40,16 @@
 | 中转文档说「**Anthropic 原生**」/ 用 `/v1/messages` 端点（如 anyrouter、packycode 等） | `anthropic` |
 | 官方 Anthropic API 直连（`api.anthropic.com`） | `anthropic` |
 | 官方 Gemini 直连（`generativelanguage.googleapis.com`） | `gemini` |
-| 拿不准 | `auto`（yangzz 按 URL 自动识别） |
+| 官方 GCP Vertex AI | `vertex` |
+| 官方 AWS Bedrock | `bedrock` |
+| 拿不准（绝大多数中转） | `openai` |
 
-> ⚠️ **不要按模型名猜**。即使调 Claude，只要中转是 OpenAI 兼容的，就填 `openai`。填错了会 404 或 "endpoint not found"，换另一个再试即可。
+> ⚠️ **不要按模型名猜**。即使调 Claude，只要中转是 OpenAI 兼容的，就填 `openai`。拿不准的中转先试 `openai`；只有官方 Vertex / Bedrock 才分别选 `vertex` / `bedrock`。
 
 **配置文件路径**
 
-- macOS: `~/Library/Application Support/yangzz/config.toml`
-- Linux: `~/.config/yangzz/config.toml`
-- Windows: `%APPDATA%\yangzz\config.toml`
+- macOS / Linux: `~/.yangzz/config.toml`
+- Windows: `%USERPROFILE%\.yangzz\config.toml`
 
 **场景 A：走 GPT 系列（OpenAI 兼容中转）**
 
@@ -181,15 +182,31 @@ api_format = "anthropic"                          # 原生 Anthropic 协议
 # npm（推荐）
 npm install -g yangzz
 
-# 或 Cargo
+# 或从源码编译（需要 Rust 工具链）
+git clone https://github.com/yangzz-contributors/yangzz.git
+cd yangzz
 cargo install --path crates/yangzz
 ```
+
+> `yangzz` 的 npm 分发已改成 **主包 + 平台子包**。
+> 安装主包时，npm 会自动拉取与你当前平台匹配的原生二进制子包。
+> 如果安装后运行提示 `Binary not found`，通常是 **当前平台子包没被安装**（包管理器跳过了 optionalDependencies）。
+>
+> ```bash
+> npm install -g yangzz
+>
+> # 如果当前平台子包没装上，可手动补装，例如 Apple Silicon:
+> npm install -g @yangzz123/yangzz-darwin-arm64
+>
+> # 或直接从源码安装
+> cargo install yangzz
+> ```
 
 ### 一键配置
 
 **把下面脚本中的 3 个值改成你自己的，复制粘贴到终端执行即可：**
 
-> 💡 脚本默认用 `api_format = "openai"`，覆盖绝大多数中转。如果你的中转是 **Anthropic 原生**（如 anyrouter、packycode，URL 带 `/v1/messages`），跑完脚本后手动把配置文件里那一行改成 `api_format = "anthropic"`。详见 [api_format 决策表](#最小配置示例中转)。
+> 💡 脚本默认用 `api_format = "openai"`，覆盖绝大多数中转。如果你的中转是 **Anthropic 原生**（如 anyrouter、packycode，接口走 `/v1/messages`），跑完脚本后手动把配置文件里那一行改成 `api_format = "anthropic"`。详见 [api_format 决策表](#最小配置示例中转)。
 
 <details>
 <summary><b>🍎 macOS / 🐧 Linux</b>（点击展开）</summary>
@@ -201,11 +218,7 @@ MY_URL="https://你的中转地址"               # 中转商给你的地址
 MY_MODEL="claude-sonnet-4-20250514"        # 默认模型（改成你想用的，如 gpt-4o、deepseek-chat 等）
 
 # —— 以下不用动 ——
-if [ "$(uname)" = "Darwin" ]; then
-  DIR="$HOME/Library/Application Support/yangzz"
-else
-  DIR="$HOME/.config/yangzz"
-fi
+DIR="$HOME/.yangzz"
 mkdir -p "$DIR"
 cat > "$DIR/config.toml" << EOF
 provider = "my-relay"
@@ -236,7 +249,7 @@ $MY_URL = "https://你的中转地址"              # 中转商给你的地址
 $MY_MODEL = "claude-sonnet-4-20250514"       # 默认模型（改成你想用的，如 gpt-4o、deepseek-chat 等）
 
 # —— 以下不用动 ——
-$dir = "$env:APPDATA\yangzz"
+$dir = Join-Path $HOME ".yangzz"
 New-Item -ItemType Directory -Force -Path $dir | Out-Null
 @"
 provider = "my-relay"
@@ -270,11 +283,7 @@ B_KEY="sk-bbb"                             # B 中转的 key
 B_URL="https://b-relay.example.com"        # B 中转的地址
 
 # —— 以下不用动 ——
-if [ "$(uname)" = "Darwin" ]; then
-  DIR="$HOME/Library/Application Support/yangzz"
-else
-  DIR="$HOME/.config/yangzz"
-fi
+DIR="$HOME/.yangzz"
 mkdir -p "$DIR"
 cat > "$DIR/config.toml" << EOF
 provider = "a-relay"
@@ -322,20 +331,20 @@ echo "🚀 对话中用 /model 切换模型，yangzz 会自动匹配对应的中
 yangzz 的配置规则（你必须遵守）：
 
 1. 配置文件路径：
-   - macOS: ~/Library/Application Support/yangzz/config.toml
-   - Linux: ~/.config/yangzz/config.toml
-   - Windows: %APPDATA%\yangzz\config.toml
+   - macOS / Linux: ~/.yangzz/config.toml
+   - Windows: %USERPROFILE%\.yangzz\config.toml
 
 2. 配置文件格式是 TOML，必须包含：
    - 顶层 provider = "随便起的名字"
    - 顶层 model = "默认模型名"
    - 一个或多个 [[providers]] 数组项，每项有 name、api_key、base_url、default_model、api_format 五个字段
 
-3. api_format 取值规则（只能四选一）：
+3. api_format 取值规则（当前文档口径）：
    - "openai"：中转走 /v1/chat/completions 端点（国内绝大多数中转、new-api、one-api、sub2api 的 OpenAI 模式）
    - "anthropic"：中转走 /v1/messages 端点（anyrouter、packycode、sub2api 的 Anthropic 模式、官方 api.anthropic.com）
    - "gemini"：官方 generativelanguage.googleapis.com
-   - "auto"：不确定就填这个，yangzz 按 URL 自动识别
+   - "vertex"：官方 GCP Vertex AI
+   - "bedrock"：官方 AWS Bedrock
 
 4. base_url 规则（非常重要，填错会 404）：
    - 只填中转的根域名，例如 "https://myrelay.com"
@@ -373,9 +382,8 @@ yangzz 的配置规则（你必须遵守）：
 <summary>手动配置（不用脚本）</summary>
 
 配置文件位置：
-- **Mac**: `~/Library/Application Support/yangzz/config.toml`
-- **Linux**: `~/.config/yangzz/config.toml`
-- **Windows**: `%APPDATA%\yangzz\config.toml`
+- **macOS / Linux**: `~/.yangzz/config.toml`
+- **Windows**: `%USERPROFILE%\.yangzz\config.toml`
 
 ```toml
 provider = "my-relay"

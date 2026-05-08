@@ -1,9 +1,11 @@
+mod cli_mode;
 mod guide;
 mod repl;
 mod repl_commands;
 mod repl_help;
 mod repl_render;
 mod slash;
+#[cfg(feature = "tui")]
 mod tui;
 mod ui;
 
@@ -13,6 +15,7 @@ use yangzz_core::config::settings::CliOverrides;
 use yangzz_core::config::{self, Settings};
 use yangzz_core::permission::PermissionManager;
 use yangzz_core::tool::{ToolExecutor, ToolRegistry};
+use yangzz_core::{mcp, plugin};
 
 pub use guide::print_guide;
 use ui::format::*;
@@ -25,7 +28,7 @@ struct Cli {
     /// Initial prompt (if provided, runs in single-shot mode)
     prompt: Option<String>,
 
-    /// Provider name (anthropic, openai, gemini, deepseek, glm, grok, xiaomi, ollama)
+    /// Provider name (openai, anthropic, gemini, deepseek, glm, grok, xiaomi, ollama, bedrock, vertex, or custom)
     #[arg(long)]
     provider: Option<String>,
 
@@ -53,6 +56,7 @@ struct Cli {
     /// Opt into experimental full-screen TUI (alternate screen + modal
     /// permission dialogs). REPL is recommended for daily use because
     /// it preserves native terminal scroll / selection / copy.
+    #[cfg(feature = "tui")]
     #[arg(long)]
     tui: bool,
 
@@ -71,6 +75,18 @@ struct Cli {
     /// Print all yangzz data paths (useful for debugging / manual cleanup)
     #[arg(long = "where")]
     where_paths: bool,
+}
+
+#[allow(unused_variables)]
+fn cli_wants_tui(cli: &Cli) -> bool {
+    #[cfg(feature = "tui")]
+    {
+        cli.tui
+    }
+    #[cfg(not(feature = "tui"))]
+    {
+        false
+    }
 }
 
 #[tokio::main]
@@ -93,8 +109,6 @@ async fn main() -> anyhow::Result<()> {
         let _ = crossterm::terminal::disable_raw_mode();
     }
 
-    let cli = Cli::parse();
-
     // Silently migrate legacy data (pre-v0.3.0) on every startup.
     // Best-effort; safe to run repeatedly.
     if yangzz_core::paths::maybe_migrate_legacy() {
@@ -103,6 +117,29 @@ async fn main() -> anyhow::Result<()> {
             yangzz_core::paths::yangzz_dir().display()
         );
     }
+
+    let raw_args: Vec<String> = std::env::args().collect();
+    if let Some(detected) = cli_mode::detect_cli_command(&raw_args) {
+        let cli = Cli::parse_from(&detected.parse_args);
+        let cwd = std::env::current_dir()?;
+        let registry = build_tool_registry(&cwd).await;
+        let permission = Arc::new(PermissionManager::new());
+        let executor = ToolExecutor::new(registry, permission, cwd);
+        cli_mode::run_cli_command(
+            &detected,
+            CliOverrides {
+                provider: cli.provider,
+                model: cli.model,
+                api_key: cli.api_key,
+                base_url: cli.base_url,
+            },
+            &executor,
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let cli = Cli::parse();
 
     // --where flag: print all data paths
     if cli.where_paths {
@@ -135,6 +172,9 @@ async fn main() -> anyhow::Result<()> {
         run_doctor();
         return Ok(());
     }
+
+    // Capture TUI flag before cli fields are moved
+    let wants_tui = cli_wants_tui(&cli);
 
     // Load settings with CLI overrides
     let settings = Settings::load(CliOverrides {
@@ -177,49 +217,77 @@ async fn main() -> anyhow::Result<()> {
 
     // Setup tool system
     let cwd = std::env::current_dir()?;
-    let registry = ToolRegistry::with_builtins(&cwd);
+    let registry = build_tool_registry(&cwd).await;
 
     if let Some(prompt) = cli.prompt {
         // Single-shot mode — REPL-style rendering to stdout makes sense for
         // pipelines (yangzz "explain" | tee out.txt).
         let permission = Arc::new(PermissionManager::new());
-        let executor = ToolExecutor::new(registry, permission, cwd);
+        let executor = ToolExecutor::new(registry, permission, cwd)
+            .with_provider(Arc::clone(&provider), model.clone(), max_tokens);
         repl::single_shot(&provider, &model, max_tokens, &prompt, &executor).await?;
-    } else if cli.tui {
+    } else if cfg!(feature = "tui") && wants_tui {
         // Opt-in: experimental TUI (alternate-screen + modal permissions).
         // Trade-off: loses native terminal scroll / selection / copy.
-        let (perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel();
-        let permission = Arc::new(PermissionManager::channel(perm_tx));
-        let executor = ToolExecutor::new(registry, permission, cwd);
-        tui::run(
-            &provider,
-            &model,
-            max_tokens,
-            Arc::new(executor),
-            &settings,
-            perm_rx,
-        )
-        .await?;
+        #[cfg(feature = "tui")]
+        {
+            let (perm_tx, perm_rx) = tokio::sync::mpsc::unbounded_channel();
+            let permission = Arc::new(PermissionManager::channel(perm_tx));
+            let executor = ToolExecutor::new(registry, permission, cwd);
+            tui::run(
+                &provider,
+                &model,
+                max_tokens,
+                Arc::new(executor),
+                &settings,
+                perm_rx,
+            )
+            .await?;
+        }
     } else {
         // Default (v0.3.1+): classic REPL — the documented product.
         // Native scroll, native selection, full slash-command fidelity.
         // `--repl` is now a no-op but kept so existing scripts don't break.
         let _ = cli.repl;
         let permission = Arc::new(PermissionManager::new());
-        let executor = ToolExecutor::new(registry, permission, cwd);
+        let executor = ToolExecutor::new(registry, permission, cwd)
+            .with_provider(Arc::clone(&provider), model.clone(), max_tokens);
         repl::run(&provider, &model, max_tokens, &executor, &settings).await?;
     }
 
     Ok(())
 }
 
+async fn build_tool_registry(cwd: &std::path::Path) -> ToolRegistry {
+    let mut registry = ToolRegistry::with_builtins(cwd);
+
+    for tool in plugin::load_plugins(cwd) {
+        registry.register(tool);
+    }
+
+    for tool in mcp::load_mcp_runtime_tools(cwd).await {
+        registry.register(tool);
+    }
+
+    registry
+}
+
 // ── Interactive Setup Wizard ──
 // 核心心智模型（基于 cc-switch / sub2api / new-api 三项目分析）：
 //   - provider  = 你给这份配置起的名字（不是厂商）
 //   - base_url  = 实际入口地址（允许带路径前缀，如 /antigravity）
-//   - api_format = 入口用什么协议说话（openai / anthropic / gemini / auto）
+//   - api_format = 入口用什么协议说话（openai / anthropic / gemini / vertex / bedrock）
 //   - model     = 希望上游路由到的模型名
 // 只问必要问题，其他给合理默认。
+
+fn normalize_setup_api_format(raw: &str) -> Option<String> {
+    let normalized = raw.trim().to_lowercase();
+    match normalized.as_str() {
+        "" => Some("openai".to_string()),
+        "openai" | "anthropic" | "gemini" | "vertex" | "bedrock" => Some(normalized),
+        _ => None,
+    }
+}
 
 /// Returns true if setup succeeded and caller should continue into REPL
 fn run_setup_wizard() -> bool {
@@ -267,7 +335,7 @@ fn run_setup_wizard() -> bool {
     println!("  {BOLD_GOLD}   ░░░░░░                         ░░░░░░{RESET}");
     println!();
     println!(
-        "  {BOLD}欢迎使用 yangzz！{RESET} {DIM}下面 4 步给这份配置起名、填入口、填 Key、选模型。{RESET}"
+        "  {BOLD}欢迎使用 yangzz！{RESET} {DIM}下面 5 步给这份配置起名、选协议、填入口、填 Key、选模型。{RESET}"
     );
     println!();
 
@@ -278,34 +346,35 @@ fn run_setup_wizard() -> bool {
         return false;
     }
 
-    // ── 2. 入口地址 ──
+    // ── 2. api_format：入口协议 ──
+    let api_format = prompt_default(
+        "接口协议（openai / anthropic / gemini / vertex / bedrock）",
+        "openai",
+    );
+    let Some(api_format) = normalize_setup_api_format(&api_format) else {
+        println!(
+            "  {RED}✖{RESET} 不支持的协议：{api_format}（可选：openai / anthropic / gemini / vertex / bedrock）"
+        );
+        return false;
+    };
+
+    // ── 3. 入口地址 ──
     // 允许带 path（例如 https://relay.example.com/antigravity）
-    let url = prompt(&format!(
-        "{BOLD}入口地址{RESET} {DIM}(含路径，如 https://api.example.com 或 https://relay.com/antigravity): {RESET}"
-    ));
-    if url.is_empty() {
-        println!("  {RED}✖{RESET} 入口地址不能为空");
+    // Vertex / Bedrock 走云厂商环境变量时，这里可留空。
+    let url = prompt_default("入口地址（含路径；Vertex / Bedrock 可留空）", "");
+    if url.is_empty() && !matches!(api_format.as_str(), "vertex" | "bedrock") {
+        println!("  {RED}✖{RESET} 入口地址不能为空（Vertex / Bedrock 可留空）");
         return false;
     }
 
-    // ── 3. API Key ──
-    let key = prompt(&format!("{BOLD}API Key: {RESET}"));
-    if key.is_empty() {
-        println!("  {RED}✖{RESET} Key 不能为空");
-        return false;
-    }
+    // ── 4. API Key ──
+    let key = prompt(&format!("{BOLD}API Key（可留空）: {RESET}"));
 
-    // ── 4. 默认模型 ──
+    // ── 5. 默认模型 ──
     let model = prompt_default(
         "默认模型 (要跟入口实际支持的模型名一致)",
         "claude-sonnet-4-20250514",
     );
-
-    // ── api_format：入口协议 ──
-    // 99% 的中转站都说 OpenAI 协议，默认就够。
-    // auto 表示「按 URL host 自动判断」—— 对官方域名有效，对自定义中转仍按 OpenAI。
-    // 如果你的中转只提供 Claude 原生 /v1/messages，进配置文件手动改成 "anthropic" 即可。
-    let api_format = "openai";
 
     // ── Write config — unified ~/.yangzz/config.toml ──
     yangzz_core::paths::ensure_yangzz_dir();
@@ -355,6 +424,14 @@ api_format = "{api_format}"
     println!("    {GOLD}/provider add{RESET}     {DIM}再加一个中转{RESET}");
     println!("    {GOLD}/model{RESET}            {DIM}切换模型{RESET}");
     println!("    {GOLD}/quit{RESET}             {DIM}退出{RESET}");
+    if matches!(api_format.as_str(), "vertex" | "bedrock") {
+        println!();
+        println!("  {DIM}提示：该协议依赖云厂商环境变量鉴权。{RESET}");
+        println!("  {DIM}Vertex 需要 GOOGLE_CLOUD_PROJECT + GOOGLE_ACCESS_TOKEN{RESET}");
+        println!(
+            "  {DIM}Bedrock 需要 AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+ AWS_REGION){RESET}"
+        );
+    }
     println!();
 
     true
@@ -640,4 +717,35 @@ fn run_uninstall() {
     println!();
     println!("  {DIM}再见 👋{RESET}");
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_setup_api_format;
+
+    #[test]
+    fn normalize_setup_api_format_supports_documented_drivers() {
+        assert_eq!(normalize_setup_api_format("").as_deref(), Some("openai"));
+        assert_eq!(
+            normalize_setup_api_format("openai").as_deref(),
+            Some("openai")
+        );
+        assert_eq!(
+            normalize_setup_api_format("anthropic").as_deref(),
+            Some("anthropic")
+        );
+        assert_eq!(
+            normalize_setup_api_format("gemini").as_deref(),
+            Some("gemini")
+        );
+        assert_eq!(
+            normalize_setup_api_format("vertex").as_deref(),
+            Some("vertex")
+        );
+        assert_eq!(
+            normalize_setup_api_format("bedrock").as_deref(),
+            Some("bedrock")
+        );
+        assert_eq!(normalize_setup_api_format("custom"), None);
+    }
 }

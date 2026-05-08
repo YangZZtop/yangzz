@@ -8,6 +8,7 @@ use std::time::Instant;
 use yangzz_core::config;
 use yangzz_core::config::Settings;
 use yangzz_core::config::settings::CliOverrides;
+use yangzz_core::db::Database;
 use yangzz_core::memory;
 use yangzz_core::message::Message;
 use yangzz_core::provider::Provider;
@@ -26,9 +27,10 @@ use crate::ui::{banner, select, status};
 
 const SYSTEM_PROMPT: &str = r#"You are yangzz, an AI coding assistant running in the user's terminal.
 
-You have access to 14 tools:
-bash, file_read, file_write, file_edit, file_append, multi_edit, grep,
-glob, list_dir, tree, fetch, ask_user, notebook_read, notebook_edit.
+You have access to these tools:
+bash, file_read, file_write, file_edit, file_append, multi_edit, parallel_edit,
+grep, glob, list_dir, tree, fetch, ask_user, notebook_read, notebook_edit,
+code_graph, sub_agent, todo.
 
 Guidelines:
 - Read files before editing to understand context. file_read returns the full file by default.
@@ -37,6 +39,11 @@ Guidelines:
 - Use file_write for creating new files, file_append for appending.
 - Use bash for running commands, tests, installing packages.
 - Use grep to search content, glob to find files by pattern, list_dir/tree for directory structure.
+- Prefer code_graph over grep/bash when the user asks structural questions about code — e.g.
+  "how many structs / classes / traits / functions", "where is X defined", "who calls X",
+  "list symbols in file Y". code_graph uses tree-sitter AST parsing (Rust/TS/TSX/Python)
+  so it's faster and more accurate than text-level search, and it already excludes
+  node_modules, venv, target, .git, dist, build.
 - Use fetch to retrieve web content.
 - Use ask_user when you need clarification from the user.
 - Use notebook_read/notebook_edit for Jupyter notebooks.
@@ -91,6 +98,23 @@ pub async fn run(
     let mut session = Session::new(model, provider.name());
     let mut messages: Vec<Message> = Vec::new();
 
+    // SQLite persistence
+    let db = {
+        let db_path = Database::default_path();
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        Database::open(&db_path).ok()
+    };
+    if let Some(ref db) = db {
+        let _ = db.create_session(
+            &session.id,
+            &current_model,
+            provider.name(),
+            &session.cwd,
+        );
+    }
+
     // Skills
     let cwd = std::env::current_dir().unwrap_or_default();
     let mut skills = skill::builtin_skills();
@@ -98,6 +122,38 @@ pub async fn run(
 
     // ── Welcome ──
     banner::print_welcome(&current_model, provider.name(), env!("CARGO_PKG_VERSION"));
+
+    // ── Auto-resume: offer to continue recent session ──
+    if let Some(prev) = Session::load_latest() {
+        if !prev.messages.is_empty() {
+            if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(&prev.updated_at) {
+                let age = chrono::Utc::now().signed_duration_since(ts);
+                if age.num_hours() < 4 {
+                    let msg_count = prev.messages.len();
+                    let ago = if age.num_minutes() < 1 {
+                        "just now".to_string()
+                    } else if age.num_minutes() < 60 {
+                        format!("{}m ago", age.num_minutes())
+                    } else {
+                        format!("{}h ago", age.num_hours())
+                    };
+                    println!(
+                        "  {DIM}Previous session ({msg_count} messages, {ago}){RESET}"
+                    );
+                    print!("  {SOFT_GOLD}Resume? [y/N]{RESET} ");
+                    let _ = io::stdout().flush();
+                    let mut answer = String::new();
+                    if io::stdin().read_line(&mut answer).is_ok()
+                        && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+                    {
+                        messages = prev.messages.clone();
+                        session = prev;
+                        println!("  {GREEN}✓{RESET} {DIM}Resumed ({msg_count} messages){RESET}");
+                    }
+                }
+            }
+        }
+    }
 
     let config = Config::builder()
         .completion_type(rustyline::CompletionType::List)
@@ -391,6 +447,51 @@ pub async fn run(
                 status::render_status_bar(&stats);
                 crate::ui::format::print_divider();
 
+                // Auto-save session after every successful turn
+                session.messages = messages.clone();
+                let _ = session.save();
+
+                // Persist to SQLite: save the last user + assistant messages
+                if let Some(ref db) = db {
+                    let recent: Vec<&Message> = messages.iter().rev().take(2).collect();
+                    for msg in recent.iter().rev() {
+                        let role = match msg.role {
+                            yangzz_core::message::Role::User => "user",
+                            yangzz_core::message::Role::Assistant => "assistant",
+                            yangzz_core::message::Role::System => "system",
+                        };
+                        if let Ok(json) = serde_json::to_string(&msg.content) {
+                            let _ = db.insert_message(&session.id, role, &json);
+                        }
+                    }
+
+                    // Auto-title: generate session title after 5 user messages
+                    let user_msg_count = messages
+                        .iter()
+                        .filter(|m| m.role == yangzz_core::message::Role::User)
+                        .count();
+                    if user_msg_count == 5 {
+                        let summary_input = build_title_prompt(&messages);
+                        let provider_clone = Arc::clone(&current_provider);
+                        let model_clone = current_model.clone();
+                        let session_id = session.id.clone();
+                        let db_path = Database::default_path();
+                        tokio::spawn(async move {
+                            if let Ok(title) = generate_title(
+                                &provider_clone,
+                                &model_clone,
+                                &summary_input,
+                            )
+                            .await
+                            {
+                                if let Ok(db) = Database::open(&db_path) {
+                                    let _ = db.update_session_title(&session_id, &title);
+                                }
+                            }
+                        });
+                    }
+                }
+
                 // Auto memory capture: scan the last exchange for memory-worthy signals
                 let assistant_text = messages
                     .iter()
@@ -422,4 +523,57 @@ pub async fn run(
     }
 
     Ok(())
+}
+
+fn build_title_prompt(messages: &[Message]) -> String {
+    let mut snippets = String::new();
+    for msg in messages.iter().take(10) {
+        let role = match msg.role {
+            yangzz_core::message::Role::User => "U",
+            yangzz_core::message::Role::Assistant => "A",
+            yangzz_core::message::Role::System => continue,
+        };
+        for block in &msg.content {
+            if let yangzz_core::message::ContentBlock::Text { text } = block {
+                let short: String = text.chars().take(100).collect();
+                snippets.push_str(&format!("{role}: {short}\n"));
+                break;
+            }
+        }
+    }
+    snippets
+}
+
+async fn generate_title(
+    provider: &Arc<dyn Provider>,
+    model: &str,
+    conversation_snippet: &str,
+) -> Result<String> {
+    use yangzz_core::provider::CreateMessageRequest;
+
+    let prompt = format!(
+        "Based on this conversation, generate a short title (max 40 chars, same language as the user). Reply with ONLY the title, nothing else.\n\n{conversation_snippet}"
+    );
+    let request = CreateMessageRequest {
+        model: model.to_string(),
+        messages: vec![Message::user(&prompt)],
+        system: None,
+        max_tokens: 60,
+        temperature: Some(0.3),
+        tools: vec![],
+    };
+    let response = provider.create_message(&request).await?;
+    let title = response
+        .message
+        .content
+        .iter()
+        .find_map(|b| {
+            if let yangzz_core::message::ContentBlock::Text { text } = b {
+                Some(text.trim().to_string())
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+    Ok(title)
 }

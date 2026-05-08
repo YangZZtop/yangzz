@@ -55,7 +55,7 @@ export class Yangzz {
    */
   async run(prompt: string): Promise<TaskResult> {
     return new Promise((resolve, reject) => {
-      const args = ["--single", prompt];
+      const args = [prompt];
 
       if (this.config.model) {
         args.unshift("--model", this.config.model);
@@ -95,6 +95,13 @@ export class Yangzz {
         reject(err);
       });
     });
+  }
+
+  /**
+   * Chat alias for README examples.
+   */
+  async chat(prompt: string): Promise<TaskResult> {
+    return this.run(prompt);
   }
 
   /**

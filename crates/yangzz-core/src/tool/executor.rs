@@ -37,11 +37,28 @@ impl ToolExecutor {
         Self {
             registry,
             permission,
-            ctx: ToolContext { cwd },
+            ctx: ToolContext {
+                cwd,
+                provider: None,
+                model: None,
+                max_tokens: 4096,
+            },
             recent_calls: Mutex::new(VecDeque::new()),
             undo_stack: Mutex::new(VecDeque::new()),
             hooks: hook_list,
         }
+    }
+
+    pub fn with_provider(
+        mut self,
+        provider: Arc<dyn crate::provider::Provider>,
+        model: String,
+        max_tokens: u32,
+    ) -> Self {
+        self.ctx.provider = Some(provider);
+        self.ctx.model = Some(model);
+        self.ctx.max_tokens = max_tokens;
+        self
     }
 
     /// Execute a tool call from the model

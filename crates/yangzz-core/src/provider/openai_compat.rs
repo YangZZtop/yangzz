@@ -279,6 +279,7 @@ impl Provider for OpenAiCompatProvider {
 
         let mut final_content = Vec::new();
         let mut current_text = String::new();
+        let mut current_thinking = String::new();
         let mut current_tool_calls: Vec<(String, String, String)> = Vec::new(); // (id, name, args)
         let mut final_usage = Usage::default();
         let mut final_stop = StopReason::EndTurn;
@@ -327,6 +328,14 @@ impl Provider for OpenAiCompatProvider {
                     current_text.push_str(text);
                     let _ = tx.send(StreamEvent::TextDelta {
                         text: text.to_string(),
+                    });
+                }
+
+                // Reasoning/thinking delta (DeepSeek, Kimi, QwQ)
+                if let Some(thinking) = delta["reasoning_content"].as_str() {
+                    current_thinking.push_str(thinking);
+                    let _ = tx.send(StreamEvent::ThinkingDelta {
+                        text: thinking.to_string(),
                     });
                 }
 
@@ -385,6 +394,9 @@ impl Provider for OpenAiCompatProvider {
         }
 
         // Build final content
+        if !current_thinking.is_empty() {
+            final_content.push(ContentBlock::Thinking { text: current_thinking });
+        }
         if !current_text.is_empty() {
             final_content.push(ContentBlock::text(&current_text));
         }

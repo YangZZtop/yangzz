@@ -10,9 +10,22 @@
 npm install -g yangzz
 ```
 
+> `yangzz` 采用 **主包 + 平台子包** 分发。
+> 安装主包时，npm 会自动拉取与你当前平台匹配的原生二进制子包，不再依赖 postinstall 去 GitHub 下载。
+>
+> 如果运行时提示 `Binary not found`，通常是你的包管理器跳过了 `optionalDependencies`：
+>
+> ```bash
+> npm install -g yangzz
+> # 仍不行就手动补当前平台包，例如 Apple Silicon:
+> npm install -g @yangzz123/yangzz-darwin-arm64
+> # 或直接从源码安装:
+> cargo install yangzz
+> ```
+
 ## 配置
 
-创建 `~/Library/Application Support/yangzz/config.toml`（Mac）或 `~/.config/yangzz/config.toml`（Linux）：
+创建 `~/.yangzz/config.toml`（Windows 对应 `%USERPROFILE%\.yangzz\config.toml`）：
 
 ```toml
 provider = "my-relay"

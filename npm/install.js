@@ -11,6 +11,45 @@ const IS_WIN = os.platform() === "win32";
 const IS_MAC = os.platform() === "darwin";
 const EXT = IS_WIN ? ".exe" : "";
 const BIN_PATH = path.join(BIN_DIR, `yangzz${EXT}`);
+const PATH_FILE = path.join(BIN_DIR, ".yangzz-path");
+const STATE_FILE = path.join(BIN_DIR, ".install-state.json");
+
+function writeState(state) {
+  try {
+    fs.mkdirSync(BIN_DIR, { recursive: true });
+    fs.writeFileSync(
+      STATE_FILE,
+      JSON.stringify(
+        {
+          updatedAt: new Date().toISOString(),
+          version: PACKAGE_VERSION,
+          platform: os.platform(),
+          arch: os.arch(),
+          ...state,
+        },
+        null,
+        2,
+      ),
+    );
+  } catch {}
+}
+
+function readState() {
+  try {
+    if (!fs.existsSync(STATE_FILE)) return null;
+    return JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function clearState() {
+  try { fs.unlinkSync(STATE_FILE); } catch {}
+}
+
+function clearRecordedPath() {
+  try { fs.unlinkSync(PATH_FILE); } catch {}
+}
 
 // macOS Sequoia (15+) silently blocks unsigned arm64 binaries — they hang with
 // no error. Ad-hoc signing fixes it locally without needing an Apple Developer
@@ -44,29 +83,50 @@ function getTarget() {
   return PLATFORM_MAP[key] || null;
 }
 
+function buildDownloadUrls(target) {
+  const fileName = `yangzz-${target}${EXT}`;
+  const urls = [];
+  const customUrl = process.env.YANGZZ_DOWNLOAD_URL;
+  const customBase = process.env.YANGZZ_DOWNLOAD_BASE_URL;
+
+  if (customUrl) {
+    urls.push(customUrl);
+  }
+  if (customBase) {
+    urls.push(`${customBase.replace(/\/+$/, "")}/${fileName}`);
+  }
+
+  urls.push(
+    `https://github.com/YangZZtop/yangzz/releases/download/v${PACKAGE_VERSION}/${fileName}`
+  );
+
+  return Array.from(new Set(urls));
+}
+
 // Validate that a file looks like a real executable (not HTML error page)
 function isValidBinary(filePath) {
   try {
-    const fd = fs.openSync(filePath, 'r');
+    const fd = fs.openSync(filePath, "r");
     const buf = Buffer.alloc(4);
     fs.readSync(fd, buf, 0, 4, 0);
     fs.closeSync(fd);
     const size = fs.statSync(filePath).size;
     if (size < 50000) return false; // too small, probably error page or stub
     if (IS_WIN) {
-      // PE executable starts with 'MZ'
-      return buf[0] === 0x4D && buf[1] === 0x5A;
-    } else {
-      // ELF starts with 0x7F 'ELF', Mach-O starts with 0xCF 0xFA
-      return (buf[0] === 0x7F && buf[1] === 0x45) || // ELF
-             (buf[0] === 0xCF && buf[1] === 0xFA) || // Mach-O 64
-             (buf[0] === 0xCA && buf[1] === 0xFE);   // Mach-O universal
+      return buf[0] === 0x4d && buf[1] === 0x5a;
     }
-  } catch { return false; }
+    return (
+      (buf[0] === 0x7f && buf[1] === 0x45) ||
+      (buf[0] === 0xcf && buf[1] === 0xfa) ||
+      (buf[0] === 0xca && buf[1] === 0xfe)
+    );
+  } catch {
+    return false;
+  }
 }
 
 // ── Primary download: write a temp .js file and run it with Node ──
-// This avoids ALL shell quoting issues on Windows cmd.exe / PowerShell.
+// This avoids shell quoting issues on Windows cmd.exe / PowerShell.
 function downloadWithTempScript(url, dest) {
   const tmpScript = path.join(os.tmpdir(), `yangzz-dl-${Date.now()}.js`);
   const code = [
@@ -117,57 +177,84 @@ function downloadWithTempScript(url, dest) {
   }
 }
 
-// Strategy 1: Download pre-built binary from GitHub Releases
-function tryDownload(target) {
-  const url = `https://github.com/YangZZtop/yangzz/releases/download/v${PACKAGE_VERSION}/yangzz-${target}${EXT}`;
-  console.log(`Downloading yangzz v${PACKAGE_VERSION} for ${target}...`);
-  console.log(`  URL: ${url}`);
-
-  // Method 1: Node.js temp script (works on ALL platforms, no shell quoting issues)
-  if (downloadWithTempScript(url, BIN_PATH) && isValidBinary(BIN_PATH)) {
-    if (!IS_WIN) fs.chmodSync(BIN_PATH, 0o755);
-    adhocCodesignMac(BIN_PATH);
-    console.log(`  Binary validated: ${(fs.statSync(BIN_PATH).size / 1024 / 1024).toFixed(1)} MB`);
-    return true;
+function finalizeBinarySuccess() {
+  if (!IS_WIN) {
+    fs.chmodSync(BIN_PATH, 0o755);
   }
-  try { fs.unlinkSync(BIN_PATH); } catch {}
+  adhocCodesignMac(BIN_PATH);
+  clearRecordedPath();
+}
 
-  // Method 2: curl (macOS/Linux usually have it; Windows 10+ has curl.exe)
-  try {
-    const curlBin = IS_WIN ? "curl.exe" : "curl";
-    execSync(`${curlBin} -fsSL -o "${BIN_PATH}" "${url}"`, { stdio: "inherit", timeout: 120000 });
-    if (isValidBinary(BIN_PATH)) {
-      if (!IS_WIN) fs.chmodSync(BIN_PATH, 0o755);
-      adhocCodesignMac(BIN_PATH);
-      console.log(`  Binary validated (curl): ${(fs.statSync(BIN_PATH).size / 1024 / 1024).toFixed(1)} MB`);
+// Strategy 1: Download pre-built binary
+function tryDownload(target) {
+  const urls = buildDownloadUrls(target);
+  const errors = [];
+
+  for (const url of urls) {
+    console.log(`Downloading yangzz v${PACKAGE_VERSION} for ${target}...`);
+    console.log(`  URL: ${url}`);
+
+    if (downloadWithTempScript(url, BIN_PATH) && isValidBinary(BIN_PATH)) {
+      finalizeBinarySuccess();
+      console.log(
+        `  Binary validated: ${(fs.statSync(BIN_PATH).size / 1024 / 1024).toFixed(1)} MB`
+      );
       return true;
     }
+    errors.push(`node downloader failed: ${url}`);
     try { fs.unlinkSync(BIN_PATH); } catch {}
-  } catch (e) {
-    console.log(`  curl failed: ${e.message || "not available"}`);
-  }
 
-  // Method 3: PowerShell (Windows fallback)
-  if (IS_WIN) {
     try {
-      const psCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "` +
-        `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ` +
-        `Invoke-WebRequest -Uri '${url}' -OutFile '${BIN_PATH}' -UseBasicParsing -MaximumRedirection 10"`;
-      execSync(psCmd, { stdio: "inherit", timeout: 120000 });
+      const curlBin = IS_WIN ? "curl.exe" : "curl";
+      execSync(`${curlBin} -fsSL -o "${BIN_PATH}" "${url}"`, {
+        stdio: "inherit",
+        timeout: 120000,
+      });
       if (isValidBinary(BIN_PATH)) {
-        console.log(`  Binary validated (PowerShell): ${(fs.statSync(BIN_PATH).size / 1024 / 1024).toFixed(1)} MB`);
+        finalizeBinarySuccess();
+        console.log(
+          `  Binary validated (curl): ${(fs.statSync(BIN_PATH).size / 1024 / 1024).toFixed(1)} MB`
+        );
         return true;
       }
       try { fs.unlinkSync(BIN_PATH); } catch {}
     } catch (e) {
-      console.log(`  PowerShell download failed: ${e.message || "unknown"}`);
+      errors.push(`curl failed for ${url}: ${e.message || "not available"}`);
+      console.log(`  curl failed: ${e.message || "not available"}`);
+    }
+
+    if (IS_WIN) {
+      try {
+        const psCmd = `powershell -NoProfile -ExecutionPolicy Bypass -Command "` +
+          `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; ` +
+          `Invoke-WebRequest -Uri '${url}' -OutFile '${BIN_PATH}' -UseBasicParsing -MaximumRedirection 10"`;
+        execSync(psCmd, { stdio: "inherit", timeout: 120000 });
+        if (isValidBinary(BIN_PATH)) {
+          clearRecordedPath();
+          console.log(
+            `  Binary validated (PowerShell): ${(fs.statSync(BIN_PATH).size / 1024 / 1024).toFixed(1)} MB`
+          );
+          return true;
+        }
+        try { fs.unlinkSync(BIN_PATH); } catch {}
+      } catch (e) {
+        errors.push(`powershell failed for ${url}: ${e.message || "unknown"}`);
+        console.log(`  PowerShell download failed: ${e.message || "unknown"}`);
+      }
     }
   }
 
+  writeState({
+    phase: "download",
+    ok: false,
+    target,
+    attemptedUrls: urls,
+    errors,
+  });
   return false;
 }
 
-// Strategy 2: Check if `yangzz` is already on PATH (e.g. cargo install)
+// Strategy 2: Reuse an existing real binary (e.g. cargo install)
 function tryExistingBinary() {
   try {
     const cmd = IS_WIN ? "where yangzz 2>nul" : "which yangzz 2>/dev/null";
@@ -175,19 +262,10 @@ function tryExistingBinary() {
       encoding: "utf8",
       timeout: 5000,
     }).trim().split("\n")[0].trim();
-    if (result) {
-      console.log(`Found existing yangzz at: ${result}`);
-      // Create a wrapper to existing binary
-      if (IS_WIN) {
-        // On Windows, write a .cmd wrapper (JS wrapper handles this)
-        // Just record the path for yangzz.js to find
-        const infoPath = path.join(BIN_DIR, ".yangzz-path");
-        fs.writeFileSync(infoPath, result);
-      } else {
-        const wrapper = `#!/bin/sh\nexec "${result}" "$@"\n`;
-        fs.writeFileSync(BIN_PATH, wrapper);
-        fs.chmodSync(BIN_PATH, 0o755);
-      }
+
+    if (result && fs.existsSync(result) && isValidBinary(result)) {
+      console.log(`Found existing yangzz binary at: ${result}`);
+      fs.writeFileSync(PATH_FILE, result);
       return true;
     }
   } catch {}
@@ -206,28 +284,38 @@ function tryCargoBuild() {
   try {
     execSync("cargo install yangzz --root .", {
       stdio: "inherit",
-      timeout: 300000, // 5 minutes
+      timeout: 300000,
       cwd: __dirname,
     });
-    // cargo install puts binary in ./bin/yangzz
     if (fs.existsSync(BIN_PATH) && fs.statSync(BIN_PATH).size > 1000) {
-      adhocCodesignMac(BIN_PATH);
+      finalizeBinarySuccess();
       return true;
     }
     return false;
-  } catch {
+  } catch (e) {
+    writeState({
+      phase: "cargo",
+      ok: false,
+      error: e.message || "cargo install failed",
+    });
     return false;
   }
 }
 
 function main() {
-  // If binary already exists and is a REAL executable, skip
+  clearState();
+
   if (fs.existsSync(BIN_PATH) && isValidBinary(BIN_PATH)) {
     const sizeMB = (fs.statSync(BIN_PATH).size / 1024 / 1024).toFixed(1);
     console.log(`yangzz binary already exists (${sizeMB} MB), skipping install.`);
+    writeState({
+      phase: "reuse-native",
+      ok: true,
+      path: BIN_PATH,
+    });
     return;
   }
-  // Clean up any broken/fake binary from previous install
+
   if (fs.existsSync(BIN_PATH) && !isValidBinary(BIN_PATH)) {
     console.log("  Removing invalid binary from previous install...");
     try { fs.unlinkSync(BIN_PATH); } catch {}
@@ -237,25 +325,51 @@ function main() {
 
   const target = getTarget();
 
-  // Try download first
   if (target && tryDownload(target)) {
+    writeState({
+      phase: "download",
+      ok: true,
+      target,
+      path: BIN_PATH,
+    });
     console.log("✓ yangzz installed successfully (pre-built binary)");
     return;
   }
 
-  // Try existing binary on PATH
   if (tryExistingBinary()) {
+    writeState({
+      phase: "reuse-path",
+      ok: true,
+      path: fs.readFileSync(PATH_FILE, "utf8").trim(),
+    });
     console.log("✓ yangzz linked to existing installation");
     return;
   }
 
-  // Try cargo build
   if (tryCargoBuild()) {
+    writeState({
+      phase: "cargo",
+      ok: true,
+      path: BIN_PATH,
+    });
     console.log("✓ yangzz installed successfully (built from source)");
     return;
   }
 
-  // All strategies failed — create helpful stub
+  const previous = readState() || {};
+  writeState({
+    ...previous,
+    phase: "failed",
+    ok: false,
+    target,
+    message: "No usable binary after download / PATH reuse / cargo fallback",
+    hints: {
+      customDownloadUrl: "Set YANGZZ_DOWNLOAD_URL to a direct binary URL",
+      customDownloadBaseUrl: "Set YANGZZ_DOWNLOAD_BASE_URL to your release mirror base URL",
+      foregroundScripts: "npm install -g yangzz --foreground-scripts",
+    },
+  });
+
   console.log();
   console.log("⚠ Could not install yangzz binary automatically.");
   console.log("  Please install manually:");
@@ -273,9 +387,9 @@ function main() {
     console.log("  Option 1 (推荐): cargo install yangzz");
     console.log("  Option 2: Download from https://github.com/YangZZtop/yangzz/releases");
   }
+  console.log("  Option 3: Set YANGZZ_DOWNLOAD_BASE_URL and rerun npm rebuild yangzz");
   console.log();
 
-  // Don't write a fake .exe on Windows — it will show "not compatible" error
   if (!IS_WIN) {
     const stub = `#!/bin/sh\necho "yangzz: Binary not found. Run: cargo install yangzz"\nexit 1\n`;
     fs.writeFileSync(BIN_PATH, stub);
@@ -283,7 +397,6 @@ function main() {
   }
 }
 
-// Allow YANGZZ_FORCE_DOWNLOAD=1 to skip existing check (for npm rebuild)
 if (process.env.YANGZZ_FORCE_DOWNLOAD === "1") {
   try { fs.unlinkSync(BIN_PATH); } catch {}
 }

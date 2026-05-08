@@ -23,6 +23,7 @@ thread_local! {
 }
 
 /// Mark that we are (or aren't) in TUI raw-mode.
+#[cfg(feature = "tui")]
 pub fn set_tui_mode(enabled: bool) {
     TUI_MODE.with(|cell| *cell.borrow_mut() = enabled);
 }
@@ -55,6 +56,7 @@ pub fn blank() {
 
 /// Run `f` with output captured into a String. Returns (captured_text, f_result).
 /// Used by the TUI dispatcher to grab command output without touching stdout.
+#[cfg(feature = "tui")]
 pub fn with_capture<R, F: FnOnce() -> R>(f: F) -> (String, R) {
     // Install empty buffer
     CAPTURE.with(|cell| *cell.borrow_mut() = Some(String::new()));

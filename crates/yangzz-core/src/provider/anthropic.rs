@@ -11,11 +11,20 @@ const API_VERSION: &str = "2023-06-01";
 
 pub struct AnthropicProvider {
     transport: HttpTransport,
+    provider_name: String,
     default_model: String,
 }
 
 impl AnthropicProvider {
     pub fn new(api_key: &str, model: Option<String>) -> Result<Self, ProviderError> {
+        Self::new_named("anthropic", api_key, model)
+    }
+
+    pub fn new_named(
+        provider_name: &str,
+        api_key: &str,
+        model: Option<String>,
+    ) -> Result<Self, ProviderError> {
         let transport = HttpTransport::new(
             "https://api.anthropic.com",
             "",
@@ -28,11 +37,21 @@ impl AnthropicProvider {
 
         Ok(Self {
             transport,
+            provider_name: provider_name.to_string(),
             default_model: model.unwrap_or_else(|| "claude-sonnet-4-20250514".to_string()),
         })
     }
 
     pub fn with_base_url(
+        api_key: &str,
+        base_url: &str,
+        model: Option<String>,
+    ) -> Result<Self, ProviderError> {
+        Self::with_base_url_named("anthropic", api_key, base_url, model)
+    }
+
+    pub fn with_base_url_named(
+        provider_name: &str,
         api_key: &str,
         base_url: &str,
         model: Option<String>,
@@ -49,6 +68,7 @@ impl AnthropicProvider {
 
         Ok(Self {
             transport,
+            provider_name: provider_name.to_string(),
             default_model: model.unwrap_or_else(|| "claude-sonnet-4-20250514".to_string()),
         })
     }
@@ -93,6 +113,9 @@ impl AnthropicProvider {
                             "content": content,
                             "is_error": is_error,
                         })
+                    }
+                    ContentBlock::Thinking { text } => {
+                        serde_json::json!({ "type": "thinking", "thinking": text })
                     }
                 })
                 .collect()
@@ -190,7 +213,7 @@ impl AnthropicProvider {
 #[async_trait]
 impl Provider for AnthropicProvider {
     fn name(&self) -> &str {
-        "anthropic"
+        &self.provider_name
     }
 
     fn default_model(&self) -> &str {

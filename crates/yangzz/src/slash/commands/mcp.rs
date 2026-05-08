@@ -171,13 +171,35 @@ fn remove_server(name: &str) {
 }
 
 fn status() {
-    // TODO: wire this to actual McpManager runtime state once we thread it
-    // through ReplContext. For now show config info.
     let cwd = std::env::current_dir().unwrap_or_default();
-    let total = mcp::load_mcp_configs(&cwd).len();
-    emitln!(
-        "  {DIM}已配置{RESET} {BOLD}{}{RESET} {DIM}个 MCP server{RESET}",
-        total
-    );
-    emitln!("  {DIM}（详细运行状态将在 v0.3.1 提供）{RESET}");
+    let configs = mcp::load_mcp_configs(&cwd);
+
+    if configs.is_empty() {
+        emitln!("  {DIM}没有配置 MCP server{RESET}");
+        return;
+    }
+
+    emitln!();
+    emitln!("  {BOLD}MCP Server Status{RESET}");
+    emitln!();
+
+    let results = tokio::task::block_in_place(|| {
+        let handle = tokio::runtime::Handle::current();
+        handle.block_on(async {
+            let mut results = Vec::new();
+            for config in &configs {
+                results.push(mcp::check_server_health(config).await);
+            }
+            results
+        })
+    });
+
+    for (name, healthy, detail) in &results {
+        if *healthy {
+            emitln!("    {GREEN}✓{RESET} {BOLD}{}{RESET}  {DIM}{}{RESET}", name, detail);
+        } else {
+            emitln!("    {RED}✖{RESET} {BOLD}{}{RESET}  {DIM}{}{RESET}", name, detail);
+        }
+    }
+    emitln!();
 }

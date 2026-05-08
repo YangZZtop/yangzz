@@ -65,6 +65,9 @@ pub enum StreamEvent {
     TextDelta {
         text: String,
     },
+    ThinkingDelta {
+        text: String,
+    },
     ToolUseStart {
         id: String,
         name: String,

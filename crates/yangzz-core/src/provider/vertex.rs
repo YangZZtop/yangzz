@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 pub struct VertexProvider {
+    provider_name: String,
     project_id: String,
     region: String,
     access_token: String,
@@ -18,7 +19,18 @@ pub struct VertexProvider {
 
 impl VertexProvider {
     pub fn new(project_id: &str, region: &str, access_token: &str, model_id: &str) -> Self {
+        Self::new_named("vertex", project_id, region, access_token, model_id)
+    }
+
+    pub fn new_named(
+        provider_name: &str,
+        project_id: &str,
+        region: &str,
+        access_token: &str,
+        model_id: &str,
+    ) -> Self {
         Self {
+            provider_name: provider_name.to_string(),
             project_id: project_id.to_string(),
             region: region.to_string(),
             access_token: access_token.to_string(),
@@ -29,6 +41,17 @@ impl VertexProvider {
 
     /// Create from environment variables
     pub fn from_env() -> Option<Self> {
+        Self::from_env_with_model(None)
+    }
+
+    pub fn from_env_with_model(model_id: Option<String>) -> Option<Self> {
+        Self::from_env_with_model_named("vertex", model_id)
+    }
+
+    pub fn from_env_with_model_named(
+        provider_name: &str,
+        model_id: Option<String>,
+    ) -> Option<Self> {
         let project_id = std::env::var("GOOGLE_CLOUD_PROJECT")
             .or_else(|_| std::env::var("GCP_PROJECT_ID"))
             .ok()?;
@@ -37,10 +60,17 @@ impl VertexProvider {
         let access_token = std::env::var("GOOGLE_ACCESS_TOKEN")
             .or_else(|_| std::env::var("VERTEX_ACCESS_TOKEN"))
             .ok()?;
-        let model_id =
-            std::env::var("VERTEX_MODEL").unwrap_or_else(|_| "gemini-2.5-pro".to_string());
+        let model_id = model_id
+            .or_else(|| std::env::var("VERTEX_MODEL").ok())
+            .unwrap_or_else(|| "gemini-2.5-pro".to_string());
 
-        Some(Self::new(&project_id, &region, &access_token, &model_id))
+        Some(Self::new_named(
+            provider_name,
+            &project_id,
+            &region,
+            &access_token,
+            &model_id,
+        ))
     }
 
     fn endpoint(&self) -> String {
@@ -96,6 +126,7 @@ impl VertexProvider {
                                     "data": source.data,
                                 }
                             }),
+                            ContentBlock::Thinking { text } => json!({"type": "thinking", "thinking": text}),
                         })
                         .collect();
                     Some(json!({"role": role, "content": content}))
@@ -154,6 +185,7 @@ impl VertexProvider {
                             "data": source.data,
                         }
                     }),
+                    ContentBlock::Thinking { text } => json!({"text": format!("[thinking] {text}")}),
                 }).collect();
                         Some(json!({"role": role, "parts": parts}))
                     })
@@ -178,7 +210,7 @@ impl VertexProvider {
 #[async_trait]
 impl Provider for VertexProvider {
     fn name(&self) -> &str {
-        "vertex"
+        &self.provider_name
     }
 
     fn default_model(&self) -> &str {

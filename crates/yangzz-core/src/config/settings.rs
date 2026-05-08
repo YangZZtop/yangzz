@@ -314,6 +314,14 @@ impl Settings {
             return m.clone();
         }
         if let Some(ref name) = self.provider {
+            if name.eq_ignore_ascii_case("vertex") {
+                return std::env::var("VERTEX_MODEL")
+                    .unwrap_or_else(|_| "gemini-2.5-pro".to_string());
+            }
+            if name.eq_ignore_ascii_case("bedrock") {
+                return std::env::var("AWS_BEDROCK_MODEL")
+                    .unwrap_or_else(|_| "anthropic.claude-3-5-sonnet-20241022-v2:0".to_string());
+            }
             if let Some(preset) = find_preset(name) {
                 return preset.default_model.to_string();
             }

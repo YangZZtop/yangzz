@@ -48,11 +48,24 @@ impl StatusLine {
 
     /// Update context segment with token usage
     pub fn update_context(&mut self, input_tokens: u32, output_tokens: u32) {
+        self.update_context_with_model(input_tokens, output_tokens, None);
+    }
+
+    /// Update context segment with token usage and model-based cost calculation
+    pub fn update_context_with_model(&mut self, input_tokens: u32, output_tokens: u32, model: Option<&str>) {
         for seg in &mut self.segments {
             if let Some(ctx) = seg.as_any_mut().downcast_mut::<ContextSegment>() {
                 ctx.input_tokens += input_tokens;
                 ctx.output_tokens += output_tokens;
                 ctx.total_turns += 1;
+
+                if let Some(model_name) = model {
+                    if let Some(meta) = crate::config::model_meta::lookup_model(model_name) {
+                        let input_cost = (input_tokens as f64 / 1_000_000.0) * meta.input_price;
+                        let output_cost = (output_tokens as f64 / 1_000_000.0) * meta.output_price;
+                        ctx.cost_usd += input_cost + output_cost;
+                    }
+                }
             }
         }
     }

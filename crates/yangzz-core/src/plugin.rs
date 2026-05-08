@@ -15,6 +15,7 @@ use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tracing::{info, warn};
 
 #[derive(Deserialize, Debug)]
@@ -106,13 +107,13 @@ impl Tool for PluginTool {
 }
 
 /// Load all plugins from .yangzz/plugins/ directory
-pub fn load_plugins(cwd: &Path) -> Vec<Box<dyn Tool>> {
+pub fn load_plugins(cwd: &Path) -> Vec<Arc<dyn Tool>> {
     let plugins_dir = cwd.join(".yangzz").join("plugins");
     if !plugins_dir.exists() {
         return Vec::new();
     }
 
-    let mut tools: Vec<Box<dyn Tool>> = Vec::new();
+    let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
     let entries = match std::fs::read_dir(&plugins_dir) {
         Ok(e) => e,
@@ -134,7 +135,7 @@ pub fn load_plugins(cwd: &Path) -> Vec<Box<dyn Tool>> {
             Ok(content) => match serde_json::from_str::<PluginManifest>(&content) {
                 Ok(manifest) => {
                     info!("Loaded plugin: {} from {}", manifest.name, path.display());
-                    tools.push(Box::new(PluginTool::new(manifest, path)));
+                    tools.push(Arc::new(PluginTool::new(manifest, path)));
                 }
                 Err(e) => {
                     warn!(

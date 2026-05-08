@@ -135,7 +135,7 @@ impl Tool for NotebookEditTool {
             .ok_or_else(|| ToolError::Validation("Missing 'new_source'".into()))?;
         let mode = input["mode"].as_str().unwrap_or("replace");
 
-        let full_path = ctx.resolve_existing_path(path)?;
+        let full_path = ctx.resolve_existing_path_for_write(path)?;
 
         let content = tokio::fs::read_to_string(&full_path)
             .await

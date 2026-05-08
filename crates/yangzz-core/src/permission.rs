@@ -111,8 +111,9 @@ impl PermissionManager {
 }
 
 fn ask_via_stdin(tool_name: &str) -> Result<PermissionAnswer, String> {
+    eprintln!();
     eprint!(
-        "\n  \x1b[33m●\x1b[0m Write tool \x1b[1m{tool_name}\x1b[0m — \x1b[2m[y]es / [n]o / [a]lways\x1b[0m: "
+        "  \x1b[38;5;208m⚠\x1b[0m \x1b[1m{tool_name}\x1b[0m requires permission  \x1b[2m[\x1b[32my\x1b[0;2m]es / [\x1b[31mn\x1b[0;2m]o / [\x1b[33ma\x1b[0;2m]lways\x1b[0m "
     );
     let _ = io::stderr().flush();
 
@@ -121,11 +122,21 @@ fn ask_via_stdin(tool_name: &str) -> Result<PermissionAnswer, String> {
         .read_line(&mut response)
         .map_err(|e| e.to_string())?;
 
-    Ok(match response.trim().to_lowercase().as_str() {
+    let answer = match response.trim().to_lowercase().as_str() {
         "y" | "yes" | "" => PermissionAnswer::Yes,
         "a" | "always" => PermissionAnswer::Always,
         _ => PermissionAnswer::No,
-    })
+    };
+
+    match answer {
+        PermissionAnswer::Yes => eprintln!("  \x1b[32m✓\x1b[0m \x1b[2mAllowed\x1b[0m"),
+        PermissionAnswer::Always => {
+            eprintln!("  \x1b[32m✓\x1b[0m \x1b[2mAlways allowed for {tool_name}\x1b[0m")
+        }
+        PermissionAnswer::No => eprintln!("  \x1b[31m✖\x1b[0m \x1b[2mDenied\x1b[0m"),
+    }
+
+    Ok(answer)
 }
 
 async fn ask_via_channel(

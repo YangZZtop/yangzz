@@ -46,7 +46,7 @@ impl Tool for FileEditTool {
             .as_str()
             .ok_or_else(|| ToolError::Validation("Missing 'new_string' field".into()))?;
 
-        let full_path = ctx.resolve_existing_path(path)?;
+        let full_path = ctx.resolve_existing_path_for_write(path)?;
 
         let content = tokio::fs::read_to_string(&full_path).await.map_err(|e| {
             ToolError::Execution(format!("Cannot read {}: {e}", full_path.display()))
@@ -74,9 +74,21 @@ impl Tool for FileEditTool {
                 ToolError::Execution(format!("Cannot write {}: {e}", full_path.display()))
             })?;
 
-        Ok(ToolOutput::success(format!(
-            "Edited {}",
-            full_path.display()
-        )))
+        let mut diff = String::new();
+        diff.push_str(&format!("Edited {}\n", full_path.display()));
+        for line in old_string.lines().take(5) {
+            diff.push_str(&format!("-{line}\n"));
+        }
+        if old_string.lines().count() > 5 {
+            diff.push_str(&format!("-… ({} more lines)\n", old_string.lines().count() - 5));
+        }
+        for line in new_string.lines().take(5) {
+            diff.push_str(&format!("+{line}\n"));
+        }
+        if new_string.lines().count() > 5 {
+            diff.push_str(&format!("+… ({} more lines)\n", new_string.lines().count() - 5));
+        }
+
+        Ok(ToolOutput::success(diff))
     }
 }

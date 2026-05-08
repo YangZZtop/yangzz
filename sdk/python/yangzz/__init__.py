@@ -45,10 +45,10 @@ class Yangzz:
 
     def run(self, prompt: str) -> TaskResult:
         """Run a single-shot task (non-interactive)"""
-        args = [self.binary, "--single", prompt]
+        args = [self.binary, prompt]
 
         if self.model:
-            args = [self.binary, "--model", self.model, "--single", prompt]
+            args = [self.binary, "--model", self.model, prompt]
         if self.provider:
             args.insert(1, "--provider")
             args.insert(2, self.provider)
@@ -78,6 +78,10 @@ class Yangzz:
                 success=False,
                 output=f"yangzz binary not found: {self.binary}",
             )
+
+    def chat(self, prompt: str) -> TaskResult:
+        """Chat alias for README examples"""
+        return self.run(prompt)
 
     def execute_tool(self, name: str, input_data: Dict[str, Any]) -> ToolResult:
         """Execute a specific tool"""

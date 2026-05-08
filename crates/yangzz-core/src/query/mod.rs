@@ -4,6 +4,7 @@ use crate::provider::{
 };
 use crate::render::Renderer;
 use crate::tool::ToolExecutor;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tracing::{info, warn};
@@ -17,6 +18,50 @@ const CHARS_PER_TOKEN: usize = 4;
 const BUDGET_PRESSURE_THRESHOLD: f64 = 0.80;
 /// Default context window for unknown models
 const DEFAULT_CONTEXT_WINDOW: usize = 128_000;
+
+/// Consecutive identical tool calls before triggering loop detection
+const LOOP_DETECTION_THRESHOLD: usize = 3;
+
+/// Tracks recent tool calls to detect repetitive loops.
+struct LoopDetector {
+    /// Ring buffer of recent (tool_name, args_hash) pairs
+    recent: VecDeque<(String, u64)>,
+}
+
+impl LoopDetector {
+    fn new() -> Self {
+        Self {
+            recent: VecDeque::with_capacity(LOOP_DETECTION_THRESHOLD + 1),
+        }
+    }
+
+    /// Record a tool call. Returns true if a loop is detected.
+    fn record(&mut self, tool_name: &str, args: &serde_json::Value) -> bool {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        args.to_string().hash(&mut hasher);
+        let hash = hasher.finish();
+
+        let entry = (tool_name.to_string(), hash);
+
+        if self.recent.len() >= LOOP_DETECTION_THRESHOLD {
+            self.recent.pop_front();
+        }
+        self.recent.push_back(entry);
+
+        if self.recent.len() < LOOP_DETECTION_THRESHOLD {
+            return false;
+        }
+
+        // Check if last N calls are identical
+        let last = &self.recent[self.recent.len() - 1];
+        self.recent.iter().rev().take(LOOP_DETECTION_THRESHOLD).all(|e| e == last)
+    }
+
+    fn reset(&mut self) {
+        self.recent.clear();
+    }
+}
 
 /// Send a streaming request with retry on transient errors.
 /// Ctrl+C cancels the request and returns a Cancelled error.
@@ -62,8 +107,14 @@ async fn send_with_retry(
                     "Request failed (attempt {}), retrying in {delay}s: {e}",
                     attempt + 1
                 );
-                renderer.render_info(&format!("Connection error, retrying in {delay}s..."));
+                renderer.render_info(&format!(
+                    "Retry {}/{} in {delay}s — {}",
+                    attempt + 1,
+                    MAX_RETRIES - 1,
+                    short_error(&e)
+                ));
                 tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                renderer.render_thinking_start();
             }
             Ok(Err(e)) => return Err(e),
             Err(join_err) => {
@@ -90,7 +141,18 @@ fn is_retryable(err: &ProviderError) -> bool {
                 || msg.contains("message completed")
         }
         ProviderError::RateLimit { .. } => true,
+        ProviderError::Api { status, .. } => *status >= 500,
         _ => false,
+    }
+}
+
+fn short_error(err: &ProviderError) -> &'static str {
+    match err {
+        ProviderError::RateLimit { .. } => "rate limited",
+        ProviderError::Http(_) => "network error",
+        ProviderError::Api { status, .. } if *status >= 500 => "server error",
+        ProviderError::Stream(_) => "stream interrupted",
+        _ => "transient error",
     }
 }
 
@@ -104,16 +166,31 @@ pub async fn run_agentic_loop(
     executor: &ToolExecutor,
     renderer: &mut dyn Renderer,
 ) -> anyhow::Result<Usage> {
+    run_agentic_loop_bounded(provider, model, max_tokens, messages, system, executor, renderer, MAX_TURNS).await
+}
+
+/// Run the agentic loop with a custom turn limit (used by sub-agents)
+pub async fn run_agentic_loop_bounded(
+    provider: &Arc<dyn Provider>,
+    model: &str,
+    max_tokens: u32,
+    messages: &mut Vec<Message>,
+    system: Option<String>,
+    executor: &ToolExecutor,
+    renderer: &mut dyn Renderer,
+    max_turns: usize,
+) -> anyhow::Result<Usage> {
     let tool_defs = executor.tool_definitions();
     let mut total_usage = Usage {
         input_tokens: 0,
         output_tokens: 0,
     };
+    let mut loop_detector = LoopDetector::new();
     let context_window = crate::config::model_meta::lookup_model(model)
         .map(|m| m.context_window as usize)
         .unwrap_or(DEFAULT_CONTEXT_WINDOW);
 
-    for turn in 0..MAX_TURNS {
+    for turn in 0..max_turns {
         info!("Agentic loop turn {turn}");
         renderer.render_thinking_start();
 
@@ -121,7 +198,7 @@ pub async fn run_agentic_loop(
         let estimated_tokens = estimate_message_tokens(messages);
         if estimated_tokens > context_window * 3 / 4 {
             renderer.render_info("Compacting conversation history...");
-            compact_messages(messages);
+            compact_messages_with_summary(messages, provider, model).await;
         }
 
         // Memory level degradation based on context budget
@@ -258,8 +335,27 @@ pub async fn run_agentic_loop(
         }
 
         let mut tool_results = Vec::new();
+        let mut loop_blocked = false;
         for (id, name, input) in &tool_uses {
-            renderer.render_tool_start(name, id);
+            if loop_detector.record(name, input) {
+                warn!("Loop detected: {name} called {LOOP_DETECTION_THRESHOLD} times with same args");
+                renderer.render_error(&format!(
+                    "Loop detected: `{name}` called {} times with identical arguments. Blocking and asking model to try a different approach.",
+                    LOOP_DETECTION_THRESHOLD
+                ));
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: format!(
+                        "[LOOP DETECTED] You have called `{name}` {} consecutive times with the same arguments and gotten the same result. This approach is not working. Please try a fundamentally different strategy.",
+                        LOOP_DETECTION_THRESHOLD
+                    ),
+                    is_error: true,
+                });
+                loop_blocked = true;
+                break;
+            }
+
+            renderer.render_tool_start_with_input(name, id, input);
             let output = executor.execute(name, input).await;
 
             // Error file pre-injection: if bash fails, extract file paths from stderr
@@ -272,10 +368,15 @@ pub async fn run_agentic_loop(
                 }
             }
 
-            // Truncate very large tool results
-            if final_content.len() > 30000 {
-                final_content.truncate(30000);
-                final_content.push_str("\n... (output pruned to save context)");
+            // Truncate large tool results: keep head + tail for context
+            if final_content.len() > 16000 {
+                let head = &final_content[..6000];
+                let tail_start = final_content.len().saturating_sub(2000);
+                let tail = &final_content[tail_start..];
+                let omitted = final_content.len() - 8000;
+                final_content = format!(
+                    "{head}\n\n... [{omitted} chars omitted] ...\n\n{tail}\n(output pruned: kept first 6K + last 2K)"
+                );
             }
 
             renderer.render_tool_result(name, &final_content, output.is_error);
@@ -285,6 +386,18 @@ pub async fn run_agentic_loop(
                 content: final_content,
                 is_error: output.is_error,
             });
+        }
+
+        // If loop was blocked, add error results for remaining tool calls
+        if loop_blocked {
+            for (id, _name, _input) in tool_uses.iter().skip(tool_results.len()) {
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: "[SKIPPED] Previous tool call was blocked due to loop detection.".to_string(),
+                    is_error: true,
+                });
+            }
+            loop_detector.reset();
         }
 
         // Add tool results as a user message
@@ -307,6 +420,7 @@ fn estimate_message_tokens(messages: &[Message]) -> usize {
                 .iter()
                 .map(|b| match b {
                     ContentBlock::Text { text } => text.len(),
+                    ContentBlock::Thinking { text } => text.len(),
                     ContentBlock::ToolUse { input, .. } => input.to_string().len(),
                     ContentBlock::ToolResult { content, .. } => content.len(),
                     // Rough heuristic: base64 image ~= data bytes * 4/3. Don't blow
@@ -320,20 +434,86 @@ fn estimate_message_tokens(messages: &[Message]) -> usize {
     total_chars / CHARS_PER_TOKEN
 }
 
-/// Public wrapper for manual /compact command
+/// Public wrapper for manual /compact command (sync fallback)
 pub fn compact_messages_public(messages: &mut Vec<Message>) {
-    compact_messages(messages);
+    compact_messages_truncate(messages);
 }
 
-/// Compact old messages: keep system context, summarize middle, keep recent
-fn compact_messages(messages: &mut Vec<Message>) {
-    if messages.len() <= 4 {
+/// Async compact: summarize middle messages using the model
+async fn compact_messages_with_summary(
+    messages: &mut Vec<Message>,
+    provider: &Arc<dyn Provider>,
+    model: &str,
+) {
+    if messages.len() <= 6 {
         return;
     }
 
-    // Keep first 2 and last 4 messages, summarize the rest
     let keep_start = 2;
-    let keep_end = 4;
+    let keep_end = 6;
+    let total = messages.len();
+
+    if total <= keep_start + keep_end {
+        return;
+    }
+
+    let middle = &messages[keep_start..total - keep_end];
+    let middle_text = summarize_messages_to_text(middle);
+
+    // Ask the model to summarize
+    let summary_prompt = format!(
+        "Summarize the following conversation excerpt in 2-4 concise paragraphs. \
+         Focus on: key decisions made, files modified, tool results, and any unresolved issues. \
+         Do NOT include greetings or filler. Output ONLY the summary.\n\n---\n{middle_text}"
+    );
+
+    let request = CreateMessageRequest {
+        model: model.to_string(),
+        messages: vec![Message::user(&summary_prompt)],
+        system: None,
+        max_tokens: 1024,
+        temperature: Some(0.0),
+        tools: vec![],
+    };
+
+    let summary = match provider.create_message(&request).await {
+        Ok(resp) => resp
+            .message
+            .content
+            .iter()
+            .filter_map(|b| b.as_text())
+            .collect::<Vec<_>>()
+            .join(""),
+        Err(_) => {
+            // Fallback to truncation if summarization fails
+            compact_messages_truncate(messages);
+            return;
+        }
+    };
+
+    let middle_count = total - keep_start - keep_end;
+    let compact_text = format!(
+        "[{middle_count} earlier messages compacted. Summary:\n{summary}]"
+    );
+
+    let mut new_messages = Vec::new();
+    new_messages.extend_from_slice(&messages[..keep_start]);
+    new_messages.push(Message {
+        role: Role::User,
+        content: vec![ContentBlock::text(compact_text)],
+    });
+    new_messages.extend_from_slice(&messages[total - keep_end..]);
+    *messages = new_messages;
+}
+
+/// Fallback: truncate without LLM summarization
+fn compact_messages_truncate(messages: &mut Vec<Message>) {
+    if messages.len() <= 6 {
+        return;
+    }
+
+    let keep_start = 2;
+    let keep_end = 6;
     let total = messages.len();
 
     if total <= keep_start + keep_end {
@@ -342,7 +522,7 @@ fn compact_messages(messages: &mut Vec<Message>) {
 
     let middle_count = total - keep_start - keep_end;
     let summary = format!(
-        "[{middle_count} earlier messages compacted to save context. The conversation started with the user's initial request and involved tool calls and responses.]"
+        "[{middle_count} earlier messages compacted to save context. The conversation covered tool calls, file edits, and iterative problem-solving.]"
     );
 
     let mut new_messages = Vec::new();
@@ -355,23 +535,76 @@ fn compact_messages(messages: &mut Vec<Message>) {
     *messages = new_messages;
 }
 
+/// Extract readable text from a slice of messages for summarization
+fn summarize_messages_to_text(messages: &[Message]) -> String {
+    let mut out = String::new();
+    for msg in messages {
+        let role = match msg.role {
+            Role::User => "User",
+            Role::Assistant => "Assistant",
+            Role::System => "System",
+        };
+        for block in &msg.content {
+            match block {
+                ContentBlock::Text { text } => {
+                    // Truncate very long text blocks
+                    let truncated = if text.len() > 500 {
+                        format!("{}...[truncated]", &text[..500])
+                    } else {
+                        text.clone()
+                    };
+                    out.push_str(&format!("{role}: {truncated}\n"));
+                }
+                ContentBlock::ToolUse { name, .. } => {
+                    out.push_str(&format!("{role}: [called tool: {name}]\n"));
+                }
+                ContentBlock::ToolResult { content, is_error, .. } => {
+                    let status = if *is_error { "error" } else { "ok" };
+                    let truncated = if content.len() > 200 {
+                        format!("{}...", &content[..200])
+                    } else {
+                        content.clone()
+                    };
+                    out.push_str(&format!("{role}: [tool result ({status}): {truncated}]\n"));
+                }
+                ContentBlock::Image { .. } => {
+                    out.push_str(&format!("{role}: [image]\n"));
+                }
+                ContentBlock::Thinking { .. } => {
+                    out.push_str(&format!("{role}: [thinking]\n"));
+                }
+            }
+        }
+    }
+    // Cap total size to avoid blowing up the summarization request
+    if out.len() > 8000 {
+        out.truncate(8000);
+        out.push_str("\n...[truncated for summarization]");
+    }
+    out
+}
+
 /// Extract file paths from error output and read them
 async fn extract_and_read_error_files(error_output: &str, _executor: &ToolExecutor) -> String {
     let mut result = String::new();
-    // Common patterns: "file.rs:123:", "Error in ./src/main.rs", etc.
-    let re = regex::Regex::new(r"(?:^|[\s:])([./]?[a-zA-Z_][\w./\-]*\.[a-zA-Z]{1,10}):(\d+)").ok();
-    if let Some(re) = re {
-        let mut seen = std::collections::HashSet::new();
+    let mut seen = std::collections::HashSet::new();
+
+    // Pattern 1: "file.ext:line:" (Rust, GCC, TypeScript, ESLint)
+    // Pattern 2: 'File "path", line N' (Python traceback)
+    // Pattern 3: "at path:line:col" (Node.js stack trace)
+    let patterns = [
+        regex::Regex::new(r#"(?:^|[\s:])([./]?[a-zA-Z_][\w./\-]*\.[a-zA-Z]{1,10}):(\d+)"#).ok(),
+        regex::Regex::new(r#"File "([^"]+)", line (\d+)"#).ok(),
+        regex::Regex::new(r#"at\s+(?:\S+\s+\()?([./][^\s:]+):(\d+)"#).ok(),
+    ];
+
+    for re in patterns.iter().flatten() {
         for cap in re.captures_iter(error_output) {
             let path = cap[1].to_string();
-            if seen.contains(&path) {
+            if seen.contains(&path) || seen.len() >= 3 {
                 continue;
             }
             seen.insert(path.clone());
-
-            if seen.len() > 3 {
-                break;
-            } // max 3 files
 
             if let Ok(content) = tokio::fs::read_to_string(&path).await {
                 let line_num: usize = cap[2].parse().unwrap_or(1);

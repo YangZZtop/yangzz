@@ -5,17 +5,31 @@ mod registry;
 pub use executor::ToolExecutor;
 pub use registry::ToolRegistry;
 
+use crate::provider::Provider;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::ffi::OsString;
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 /// Tool execution context
 pub struct ToolContext {
     pub cwd: std::path::PathBuf,
+    pub provider: Option<Arc<dyn Provider>>,
+    pub model: Option<String>,
+    pub max_tokens: u32,
 }
 
 impl ToolContext {
+    pub fn minimal(cwd: PathBuf) -> Self {
+        Self {
+            cwd,
+            provider: None,
+            model: None,
+            max_tokens: 4096,
+        }
+    }
+
     /// Resolve an existing file/directory path and ensure it stays inside the
     /// active workspace.
     pub fn resolve_existing_path(&self, raw_path: &str) -> Result<PathBuf, ToolError> {
@@ -26,10 +40,22 @@ impl ToolContext {
         self.ensure_within_workspace(raw_path, &resolved)
     }
 
+    /// Resolve an existing path for a write operation and reject symlinked
+    /// targets / symlinked parent segments on the way there.
+    pub fn resolve_existing_path_for_write(&self, raw_path: &str) -> Result<PathBuf, ToolError> {
+        let candidate = self.join_path(raw_path);
+        self.ensure_no_symlink_prefix(raw_path, &candidate)?;
+        let resolved = candidate.canonicalize().map_err(|e| {
+            ToolError::Execution(format!("Cannot resolve path {}: {e}", candidate.display()))
+        })?;
+        self.ensure_within_workspace(raw_path, &resolved)
+    }
+
     /// Resolve a write target and ensure its nearest existing ancestor stays
     /// inside the active workspace.
     pub fn resolve_path_for_write(&self, raw_path: &str) -> Result<PathBuf, ToolError> {
         let candidate = self.join_path(raw_path);
+        self.ensure_no_symlink_prefix(raw_path, &candidate)?;
         if candidate.exists() {
             let resolved = candidate.canonicalize().map_err(|e| {
                 ToolError::Execution(format!("Cannot resolve path {}: {e}", candidate.display()))
@@ -79,6 +105,31 @@ impl ToolContext {
                 root.display()
             )))
         }
+    }
+
+    fn ensure_no_symlink_prefix(&self, raw_path: &str, candidate: &Path) -> Result<(), ToolError> {
+        let workspace_root = normalize_path(&self.cwd);
+        let Ok(relative) = candidate.strip_prefix(&workspace_root) else {
+            return Ok(());
+        };
+
+        let mut current = workspace_root;
+        for component in relative.components() {
+            current.push(component.as_os_str());
+            if !current.exists() {
+                continue;
+            }
+            let meta = std::fs::symlink_metadata(&current).map_err(|e| {
+                ToolError::Execution(format!("Cannot inspect path {}: {e}", current.display()))
+            })?;
+            if meta.file_type().is_symlink() {
+                return Err(ToolError::PermissionDenied(format!(
+                    "Path '{raw_path}' traverses symlink {}",
+                    current.display()
+                )));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -236,9 +287,7 @@ mod tests {
         let outside_file = outside.join("secret.txt");
         fs::write(&outside_file, "nope").unwrap();
 
-        let ctx = ToolContext {
-            cwd: workspace.clone(),
-        };
+        let ctx = ToolContext::minimal(workspace.clone());
 
         let err = ctx
             .resolve_existing_path(outside_file.to_str().unwrap())
@@ -257,12 +306,50 @@ mod tests {
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(&file, "fn main() {}").unwrap();
 
-        let ctx = ToolContext {
-            cwd: workspace.clone(),
-        };
+        let ctx = ToolContext::minimal(workspace.clone());
 
         let resolved = ctx.resolve_existing_path("src/main.rs").unwrap();
         assert_eq!(resolved, file.canonicalize().unwrap());
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn resolve_existing_path_for_write_rejects_symlink_file() {
+        let workspace = unique_test_dir("workspace");
+        let real = workspace.join("real.txt");
+        let link = workspace.join("link.txt");
+        fs::write(&real, "hello").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_file(&real, &link).unwrap();
+
+        let ctx = ToolContext::minimal(workspace.clone());
+
+        let err = ctx.resolve_existing_path_for_write("link.txt").unwrap_err();
+        assert!(matches!(err, super::ToolError::PermissionDenied(_)));
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn resolve_path_for_write_rejects_symlink_parent_directory() {
+        let workspace = unique_test_dir("workspace");
+        let real_dir = workspace.join("real_dir");
+        let link_dir = workspace.join("link_dir");
+        fs::create_dir_all(&real_dir).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&real_dir, &link_dir).unwrap();
+
+        let ctx = ToolContext::minimal(workspace.clone());
+
+        let err = ctx
+            .resolve_path_for_write("link_dir/new_file.txt")
+            .unwrap_err();
+        assert!(matches!(err, super::ToolError::PermissionDenied(_)));
 
         let _ = fs::remove_dir_all(&workspace);
     }
@@ -273,9 +360,7 @@ mod tests {
         let outside = unique_test_dir("outside");
         let outside_target = outside.join("new.txt");
 
-        let ctx = ToolContext {
-            cwd: workspace.clone(),
-        };
+        let ctx = ToolContext::minimal(workspace.clone());
 
         let err = ctx
             .resolve_path_for_write(outside_target.to_str().unwrap())
@@ -290,9 +375,7 @@ mod tests {
     #[test]
     fn resolve_path_for_write_allows_nested_file_inside_workspace() {
         let workspace = unique_test_dir("workspace");
-        let ctx = ToolContext {
-            cwd: workspace.clone(),
-        };
+        let ctx = ToolContext::minimal(workspace.clone());
 
         let resolved = ctx.resolve_path_for_write("notes/daily/today.md").unwrap();
 

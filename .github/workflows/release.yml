@@ -9,7 +9,44 @@ permissions:
   contents: write
 
 jobs:
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify tag matches package versions
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CARGO_VERSION=$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path("Cargo.toml").read_text()
+          match = re.search(r'^version = "([^"]+)"$', text, re.M)
+          if not match:
+              raise SystemExit("workspace version not found in Cargo.toml")
+          print(match.group(1))
+          PY
+          )
+          NPM_VERSION=$(node -p "require('./npm/package.json').version")
+          TS_VERSION=$(node -p "require('./sdk/typescript/package.json').version")
+          PY_VERSION=$(python3 - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path("sdk/python/setup.py").read_text()
+          match = re.search(r'version=\"([^\"]+)\"', text)
+          if not match:
+              raise SystemExit("python sdk version not found in sdk/python/setup.py")
+          print(match.group(1))
+          PY
+          )
+          echo "tag=$TAG cargo=$CARGO_VERSION npm=$NPM_VERSION ts=$TS_VERSION py=$PY_VERSION"
+          test "$TAG" = "$CARGO_VERSION"
+          test "$TAG" = "$NPM_VERSION"
+          test "$TAG" = "$TS_VERSION"
+          test "$TAG" = "$PY_VERSION"
+
   build:
+    needs: verify-version
     strategy:
       matrix:
         include:
@@ -93,3 +130,40 @@ jobs:
         with:
           files: yangzz-*
           generate_release_notes: true
+
+  publish-npm:
+    if: ${{ vars.HAS_NPM_TOKEN == 'true' }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+
+      - name: Download release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Prepare platform npm packages
+        run: node npm/scripts/prepare-platform-packages.js --artifacts-dir . --output-dir npm/platform-dist --sync-root-optional-deps
+
+      - name: Publish platform npm packages
+        run: |
+          for dir in npm/platform-dist/*; do
+            echo "Publishing $dir"
+            (cd "$dir" && npm publish --access public)
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish root npm package
+        run: |
+          cd npm
+          npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

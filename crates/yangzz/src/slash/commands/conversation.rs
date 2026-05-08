@@ -3,6 +3,7 @@ use crate::slash::{Category, CommandContext, Outcome, SlashCommand, block_on};
 use crate::ui::format::*;
 use crate::ui::i18n::t;
 use crate::ui::status;
+use yangzz_core::session::Session;
 
 pub struct ClearCommand;
 pub struct StatusCommand;
@@ -10,6 +11,8 @@ pub struct UndoCommand;
 pub struct CompactCommand;
 pub struct MemoryCommand;
 pub struct RecallCommand;
+pub struct ResumeCommand;
+pub struct HistoryCommand;
 
 impl SlashCommand for ClearCommand {
     fn name(&self) -> &'static str {
@@ -184,13 +187,32 @@ impl SlashCommand for RecallCommand {
             return Outcome::Continue;
         }
 
+        // Try FTS5 search via SQLite first
+        let db_path = yangzz_core::db::Database::default_path();
+        if let Ok(db) = yangzz_core::db::Database::open(&db_path) {
+            let project = std::env::current_dir()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if let Ok(memories) = db.search_memories(keyword, &project, 10) {
+                if !memories.is_empty() {
+                    emitln!("  {BOLD}Memories ({}):{RESET}", memories.len());
+                    for m in &memories {
+                        emitln!("  {DIM}[{}]{RESET} {}", m.kind, m.content.chars().take(80).collect::<String>());
+                    }
+                    emitln!();
+                }
+            }
+        }
+
+        // Also search JSON sessions
         let results = yangzz_core::session::Session::search(keyword);
         if results.is_empty() {
-            emitln!("  {DIM}No matches for \"{keyword}\"{RESET}");
+            emitln!("  {DIM}No session matches for \"{keyword}\"{RESET}");
             return Outcome::Continue;
         }
 
-        emitln!("  {BOLD}Found {} results:{RESET}", results.len());
+        emitln!("  {BOLD}Sessions ({}):{RESET}", results.len());
         for (idx, result) in results.iter().enumerate() {
             let date = result.date.get(..10).unwrap_or(&result.date);
             emitln!(
@@ -206,10 +228,97 @@ impl SlashCommand for RecallCommand {
     }
 }
 
+impl SlashCommand for ResumeCommand {
+    fn name(&self) -> &'static str {
+        "resume"
+    }
+    fn aliases(&self) -> &'static [&'static str] {
+        &["r"]
+    }
+    fn category(&self) -> Category {
+        Category::Conversation
+    }
+    fn summary(&self) -> &'static str {
+        "恢复上次会话"
+    }
+    fn detailed_help(&self) -> &'static str {
+        "用法:\n\
+         \x20 /resume       — 恢复当前目录最近的会话\n\
+         \x20 /resume <id>  — 恢复指定 ID 的会话\n\
+         \x20 /r"
+    }
+
+    fn handle(&self, ctx: &mut CommandContext, args: &str) -> Outcome {
+        let session = if args.trim().is_empty() {
+            Session::load_latest()
+        } else {
+            Session::load(args.trim())
+        };
+
+        match session {
+            Some(s) if !s.messages.is_empty() => {
+                let count = s.messages.len();
+                *ctx.messages = s.messages;
+                emitln!("  {GREEN}✓{RESET} Resumed session ({count} messages, model: {GOLD}{}{RESET})", s.model);
+            }
+            Some(_) => {
+                emitln!("  {DIM}Session found but has no messages{RESET}");
+            }
+            None => {
+                emitln!("  {RED}✖{RESET} No session found");
+            }
+        }
+        Outcome::Continue
+    }
+}
+
+impl SlashCommand for HistoryCommand {
+    fn name(&self) -> &'static str {
+        "history"
+    }
+    fn aliases(&self) -> &'static [&'static str] {
+        &["sessions"]
+    }
+    fn category(&self) -> Category {
+        Category::Conversation
+    }
+    fn summary(&self) -> &'static str {
+        "列出最近会话"
+    }
+    fn detailed_help(&self) -> &'static str {
+        "用法:\n\
+         \x20 /history      — 列出最近 10 个会话\n\
+         \x20 /sessions"
+    }
+
+    fn handle(&self, _ctx: &mut CommandContext, _args: &str) -> Outcome {
+        let sessions = Session::list_recent(10);
+        if sessions.is_empty() {
+            emitln!("  {DIM}No saved sessions{RESET}");
+            return Outcome::Continue;
+        }
+
+        emitln!("  {BOLD}Recent sessions:{RESET}");
+        for s in &sessions {
+            let date = s.updated_at.get(..16).unwrap_or(&s.updated_at);
+            let cwd_marker = if s.same_cwd { GOLD } else { DIM };
+            let short_id = s.id.get(..8).unwrap_or(&s.id);
+            emitln!(
+                "  {cwd_marker}{short_id}{RESET}  {DIM}{date}{RESET}  {}{RESET}  ({} msgs)",
+                s.model,
+                s.message_count
+            );
+        }
+        emitln!("  {DIM}Use /resume <id> to restore{RESET}");
+        Outcome::Continue
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ClearCommand, CompactCommand, MemoryCommand, RecallCommand, StatusCommand, UndoCommand,
+        ClearCommand, CompactCommand, HistoryCommand, MemoryCommand, RecallCommand,
+        ResumeCommand, StatusCommand, UndoCommand,
     };
     use crate::slash::{Category, SlashCommand};
 
@@ -221,6 +330,8 @@ mod tests {
         assert_eq!(CompactCommand.category(), Category::Conversation);
         assert_eq!(MemoryCommand.category(), Category::Conversation);
         assert_eq!(RecallCommand.category(), Category::Conversation);
+        assert_eq!(ResumeCommand.category(), Category::Conversation);
+        assert_eq!(HistoryCommand.category(), Category::Conversation);
     }
 
     #[test]
@@ -228,5 +339,7 @@ mod tests {
         assert_eq!(ClearCommand.aliases(), &["c"]);
         assert_eq!(UndoCommand.aliases(), &["u"]);
         assert_eq!(RecallCommand.aliases(), &["search"]);
+        assert_eq!(ResumeCommand.aliases(), &["r"]);
+        assert_eq!(HistoryCommand.aliases(), &["sessions"]);
     }
 }

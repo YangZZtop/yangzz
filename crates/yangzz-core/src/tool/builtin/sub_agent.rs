@@ -2,9 +2,9 @@ use crate::tool::{Tool, ToolContext, ToolError, ToolOutput};
 use async_trait::async_trait;
 use serde_json::{Value, json};
 
-/// SubAgent tool: spawn a focused sub-task with its own context.
-/// The sub-agent runs as a separate agentic loop with a narrowed prompt.
 pub struct SubAgentTool;
+
+const SUB_AGENT_MAX_TURNS: usize = 10;
 
 #[async_trait]
 impl Tool for SubAgentTool {
@@ -13,7 +13,7 @@ impl Tool for SubAgentTool {
     }
 
     fn description(&self) -> &str {
-        "Spawn a sub-agent to handle a focused sub-task. The sub-agent receives a task description and returns its result. Use this for complex tasks that benefit from decomposition."
+        "Spawn a sub-agent to handle a focused sub-task. The sub-agent runs its own agentic loop with tools and returns the result. Use for tasks that benefit from decomposition."
     }
 
     fn input_schema(&self) -> Value {
@@ -43,40 +43,64 @@ impl Tool for SubAgentTool {
             .ok_or_else(|| ToolError::Validation("Missing 'task'".into()))?;
         let extra_context = input["context"].as_str().unwrap_or("");
 
-        // Build a sub-agent system prompt
-        let sub_prompt = format!(
+        let provider = ctx.provider.as_ref().ok_or_else(|| {
+            ToolError::Execution("Sub-agent requires a provider (not available in this context)".into())
+        })?;
+        let model = ctx.model.as_deref().ok_or_else(|| {
+            ToolError::Execution("Sub-agent requires a model (not available in this context)".into())
+        })?;
+
+        let system_prompt = format!(
             "You are a focused sub-agent. Complete ONLY the following task and report the result concisely.\n\
-             Task: {task}\n\
-             {}\n\
              Working directory: {}\n\
              Do not ask for confirmation. Execute the task directly using available tools.\n\
-             When done, summarize what you did.",
-            if extra_context.is_empty() {
-                String::new()
-            } else {
-                format!("Context: {extra_context}\n")
-            },
+             When done, provide a brief summary of what you accomplished.",
             ctx.cwd.display()
         );
 
-        // We can't actually run a nested agentic loop here without the provider reference.
-        // Instead, we return the structured sub-task as a prompt injection that the outer
-        // agentic loop will handle as a continuation.
-        //
-        // This is the "lightweight" sub-agent pattern: the model sees the sub-task framing
-        // and focuses on it, then returns to the outer task.
-        Ok(ToolOutput::success(format!(
-            "[SUB-AGENT ACTIVATED]\n\
-             Sub-task: {task}\n\
-             {}\n\
-             Instructions: Focus exclusively on this sub-task. Use tools as needed. \
-             When complete, summarize results and return to the main task.\n\
-             \n--- Sub-agent system context ---\n{sub_prompt}",
-            if extra_context.is_empty() {
-                String::new()
-            } else {
-                format!("Context: {extra_context}\n")
+        let user_msg = if extra_context.is_empty() {
+            task.to_string()
+        } else {
+            format!("{task}\n\nContext: {extra_context}")
+        };
+
+        let mut messages = vec![crate::message::Message::user(&user_msg)];
+        let mut renderer = crate::render::NullRenderer::new();
+
+        // Build a sub-executor with the same cwd but no nested sub-agent capability
+        let sub_registry = crate::tool::ToolRegistry::with_builtins(&ctx.cwd);
+        let sub_permission = std::sync::Arc::new(crate::permission::PermissionManager::new());
+        let sub_executor = crate::tool::ToolExecutor::new(sub_registry, sub_permission, ctx.cwd.clone());
+
+        let result = crate::query::run_agentic_loop_bounded(
+            provider,
+            model,
+            ctx.max_tokens,
+            &mut messages,
+            Some(system_prompt),
+            &sub_executor,
+            &mut renderer,
+            SUB_AGENT_MAX_TURNS,
+        )
+        .await;
+
+        match result {
+            Ok(_usage) => {
+                let output = if renderer.collected_text.is_empty() {
+                    // Extract from messages if renderer didn't collect
+                    messages
+                        .iter()
+                        .rev()
+                        .find_map(|m| {
+                            m.content.iter().find_map(|b| b.as_text().map(String::from))
+                        })
+                        .unwrap_or_else(|| "[sub-agent completed with no text output]".to_string())
+                } else {
+                    renderer.collected_text
+                };
+                Ok(ToolOutput::success(output))
             }
-        )))
+            Err(e) => Ok(ToolOutput::error(format!("Sub-agent failed: {e}"))),
+        }
     }
 }

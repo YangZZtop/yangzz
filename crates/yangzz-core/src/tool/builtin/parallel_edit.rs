@@ -70,7 +70,7 @@ impl Tool for ParallelEditTool {
             })?;
 
             let full_path = ctx
-                .resolve_existing_path(file_path)
+                .resolve_existing_path_for_write(file_path)
                 .map_err(|e| ToolError::Execution(format!("Edit #{}: {}", i + 1, e)))?;
 
             let content = tokio::fs::read_to_string(&full_path).await.map_err(|e| {

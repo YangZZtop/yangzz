@@ -77,6 +77,37 @@ impl Session {
         serde_json::from_str(&content).ok()
     }
 
+    /// List recent sessions (most recent first), optionally filtered by cwd
+    pub fn list_recent(limit: usize) -> Vec<SessionSummary> {
+        let dir = Self::storage_dir();
+        let cwd = std::env::current_dir()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        let mut sessions: Vec<SessionSummary> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
+            .filter_map(|e| {
+                let content = std::fs::read_to_string(e.path()).ok()?;
+                let s: Session = serde_json::from_str(&content).ok()?;
+                Some(SessionSummary {
+                    id: s.id,
+                    updated_at: s.updated_at,
+                    model: s.model,
+                    message_count: s.messages.len(),
+                    same_cwd: s.cwd == cwd,
+                })
+            })
+            .collect();
+
+        sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        sessions.truncate(limit);
+        sessions
+    }
+
     /// Search across all sessions for a keyword (for /recall)
     pub fn search(query: &str) -> Vec<SearchResult> {
         let dir = Self::storage_dir();
@@ -148,4 +179,14 @@ pub struct SearchResult {
     pub date: String,
     pub model: String,
     pub snippet: String,
+}
+
+/// Summary of a session for listing
+#[derive(Debug)]
+pub struct SessionSummary {
+    pub id: String,
+    pub updated_at: String,
+    pub model: String,
+    pub message_count: usize,
+    pub same_cwd: bool,
 }

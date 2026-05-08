@@ -9,6 +9,10 @@ license.workspace = true
 name = "yangzz"
 path = "src/main.rs"
 
+[features]
+default = []
+tui = ["ratatui"]
+
 [dependencies]
 yangzz-core = { path = "../yangzz-core" }
 tokio = { workspace = true }
@@ -25,5 +29,5 @@ dialoguer = { workspace = true }
 dirs = { workspace = true }
 chrono = { workspace = true }
 rustyline = { workspace = true }
-ratatui = { workspace = true, features = ["unstable-rendered-line-info"] }
+ratatui = { workspace = true, features = ["unstable-rendered-line-info"], optional = true }
 unicode-width = "0.2"

@@ -11,16 +11,17 @@ pub fn print_guide() {
     emitln!("  yangzz 的配置写在自己的文件里，不影响其他工具。");
     emitln!();
     emitln!("  {BOLD}配置文件位置：{RESET}");
-    emitln!("    Mac:     ~/Library/Application Support/yangzz/config.toml");
-    emitln!("    Linux:   ~/.config/yangzz/config.toml");
-    emitln!("    Windows: %APPDATA%\\yangzz\\config.toml");
+    emitln!("    通用主目录: ~/.yangzz/");
+    emitln!("    配置文件:   ~/.yangzz/config.toml");
+    emitln!("    会话目录:   ~/.yangzz/sessions/");
+    emitln!("    全局记忆:   ~/.yangzz/MEMORY.md");
     emitln!("    项目级:   .yangzz.toml 或 .yangzz/config.toml");
     emitln!();
     emitln!("  {BOLD_GOLD}最常见：用中转站{RESET}");
     emitln!();
     emitln!("  从中转商拿到 地址+Key 后，创建配置文件写入：");
     emitln!();
-    emitln!("    {DIM}# ~/Library/Application Support/yangzz/config.toml{RESET}");
+    emitln!("    {DIM}# ~/.yangzz/config.toml{RESET}");
     emitln!();
     emitln!(
         "    {BOLD}provider = \"my-relay\"{RESET}              {DIM}# 配置名，和 [[providers]].name 对应（不是厂商）{RESET}"
@@ -29,13 +30,15 @@ pub fn print_guide() {
     emitln!();
     emitln!("    {BOLD}[[providers]]{RESET}");
     emitln!("    {BOLD}name = \"my-relay\"{RESET}");
-    emitln!("    {BOLD}api_key = \"sk-你的key\"{RESET}");
+    emitln!(
+        "    {BOLD}api_key = \"sk-你的key\"{RESET}            {DIM}# 可留空（如 xiaomi / ollama / 某些中转）{RESET}"
+    );
     emitln!(
         "    {BOLD}base_url = \"https://你的中转地址\"{RESET}     {DIM}# 支持带路径前缀，如 .../antigravity{RESET}"
     );
     emitln!("    {BOLD}default_model = \"claude-sonnet-4-20250514\"{RESET}");
     emitln!(
-        "    {BOLD}api_format = \"openai\"{RESET}          {DIM}# 入口协议：openai / anthropic / gemini / auto{RESET}"
+        "    {BOLD}api_format = \"openai\"{RESET}          {DIM}# 入口协议：openai / anthropic / gemini / vertex / bedrock{RESET}"
     );
     emitln!("    {BOLD}max_tokens = 16384{RESET}             {DIM}# 单次最大输出（可选）{RESET}");
     emitln!("    {BOLD}thinking_budget = 32000{RESET}        {DIM}# 思考深度（可选）{RESET}");
@@ -53,6 +56,7 @@ pub fn print_guide() {
     emitln!(
         "  {BOLD_GOLD}用 Ollama？{RESET}   base_url = \"http://localhost:11434\"，api_key 随便填。"
     );
+    emitln!("  {BOLD_GOLD}用 Vertex / Bedrock？{RESET} api_format 选对应协议，认证走环境变量。");
     emitln!();
     emitln!("  ──────────────────");
     emitln!();

@@ -13,6 +13,10 @@
 .DS_Store
 Thumbs.db
 
+# Backups
+.backup/
+.tmp-npm-cache/
+
 # yangzz runtime data (generated when testing locally)
 MEMORY.md
 .yangzz/

@@ -16,6 +16,10 @@ pub enum ContentBlock {
     Text {
         text: String,
     },
+    /// Reasoning/thinking content from models like DeepSeek, Kimi, o3
+    Thinking {
+        text: String,
+    },
     /// Image attachment (for vision-capable models). Carried as base64 +
     /// media_type (e.g. "image/png"). Providers serialize this differently:
     /// - OpenAI-compat: `image_url` part with `data:<mt>;base64,<data>` URL

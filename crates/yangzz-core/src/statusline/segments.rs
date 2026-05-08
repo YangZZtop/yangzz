@@ -82,6 +82,7 @@ pub struct ContextSegment {
     pub input_tokens: u32,
     pub output_tokens: u32,
     pub total_turns: u32,
+    pub cost_usd: f64,
 }
 
 impl Default for ContextSegment {
@@ -90,6 +91,7 @@ impl Default for ContextSegment {
             input_tokens: 0,
             output_tokens: 0,
             total_turns: 0,
+            cost_usd: 0.0,
         }
     }
 }
@@ -104,6 +106,16 @@ impl ContextSegment {
             format!("{n}")
         }
     }
+
+    fn format_cost(usd: f64) -> String {
+        if usd < 0.001 {
+            "<$0.01".into()
+        } else if usd < 1.0 {
+            format!("${:.3}", usd)
+        } else {
+            format!("${:.2}", usd)
+        }
+    }
 }
 
 impl Segment for ContextSegment {
@@ -114,7 +126,7 @@ impl Segment for ContextSegment {
 
         let total = self.input_tokens + self.output_tokens;
         Some(SegmentData {
-            primary: format!("📊 {}", Self::format_tokens(total)),
+            primary: format!("📊 {} ({})", Self::format_tokens(total), Self::format_cost(self.cost_usd)),
             secondary: format!(
                 "{}↑ {}↓ T{}",
                 Self::format_tokens(self.input_tokens),

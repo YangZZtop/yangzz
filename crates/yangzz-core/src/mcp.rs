@@ -3,13 +3,17 @@
 //! Connects to external MCP servers via stdio transport (JSON-RPC 2.0).
 //! Discovers tools from MCP servers and makes them available to the agentic loop.
 
+use crate::tool::{Tool, ToolContext, ToolError, ToolOutput};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
+use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 /// MCP server configuration from mcp.json
@@ -98,7 +102,7 @@ impl McpConnection {
     }
 
     /// Send JSON-RPC initialize request
-    async fn initialize(&mut self) -> anyhow::Result<()> {
+    pub async fn initialize(&mut self) -> anyhow::Result<()> {
         let resp = self
             .send_request(
                 "initialize",
@@ -249,6 +253,10 @@ impl McpConnection {
         }
 
         Ok(())
+    }
+
+    pub fn shutdown(&mut self) {
+        let _ = self.child.start_kill();
     }
 }
 
@@ -402,6 +410,23 @@ impl McpManager {
         conn.call_tool(tool_name, arguments).await
     }
 
+    /// Call an MCP tool on a specific server. This avoids collisions when
+    /// multiple MCP servers expose the same tool name.
+    pub async fn call_tool_on_server(
+        &mut self,
+        server_name: &str,
+        tool_name: &str,
+        arguments: &Value,
+    ) -> anyhow::Result<String> {
+        let conn = self
+            .connections
+            .iter_mut()
+            .find(|c| c.config.name == server_name)
+            .ok_or_else(|| anyhow::anyhow!("MCP server not connected: {server_name}"))?;
+
+        conn.call_tool(tool_name, arguments).await
+    }
+
     /// Check if a tool name is an MCP tool
     pub fn is_mcp_tool(&self, name: &str) -> bool {
         name.starts_with("mcp_")
@@ -410,4 +435,126 @@ impl McpManager {
     pub fn tool_count(&self) -> usize {
         self.tools.len()
     }
+}
+
+#[derive(Clone)]
+struct McpRuntimeTool {
+    runtime_name: String,
+    description: String,
+    input_schema: Value,
+    server_name: String,
+    tool_name: String,
+    manager: Arc<Mutex<McpManager>>,
+}
+
+impl McpRuntimeTool {
+    fn new(tool: &McpTool, manager: Arc<Mutex<McpManager>>) -> Self {
+        Self {
+            runtime_name: format!(
+                "mcp_{}__{}",
+                sanitize_tool_name(&tool.server_name),
+                sanitize_tool_name(&tool.name)
+            ),
+            description: format!("[MCP:{}] {}", tool.server_name, tool.description),
+            input_schema: tool.input_schema.clone(),
+            server_name: tool.server_name.clone(),
+            tool_name: tool.name.clone(),
+            manager,
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for McpRuntimeTool {
+    fn name(&self) -> &str {
+        &self.runtime_name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> Value {
+        self.input_schema.clone()
+    }
+
+    async fn execute(&self, input: &Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+        let mut manager = self.manager.lock().await;
+        let result = manager
+            .call_tool_on_server(&self.server_name, &self.tool_name, input)
+            .await
+            .map_err(|e| {
+                ToolError::Execution(format!(
+                    "MCP tool '{}:{}' failed: {e}",
+                    self.server_name, self.tool_name
+                ))
+            })?;
+        Ok(ToolOutput::success(result))
+    }
+}
+
+fn sanitize_tool_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else {
+            out.push('_');
+        }
+    }
+    while out.contains("__") {
+        out = out.replace("__", "_");
+    }
+    out.trim_matches('_').to_string()
+}
+
+/// Initialize configured MCP servers and expose every discovered MCP tool as a
+/// normal runtime `Tool`, so the rest of the system can stay registry-driven.
+pub async fn load_mcp_runtime_tools(cwd: &Path) -> Vec<Arc<dyn Tool>> {
+    let manager = Arc::new(Mutex::new(McpManager::init(cwd).await));
+
+    let tools_snapshot = {
+        let guard = manager.lock().await;
+        guard.tools.clone()
+    };
+
+    let runtime_tools = tools_snapshot
+        .iter()
+        .map(|tool| Arc::new(McpRuntimeTool::new(tool, Arc::clone(&manager))) as Arc<dyn Tool>)
+        .collect::<Vec<_>>();
+
+    info!("Loaded {} MCP runtime tools", runtime_tools.len());
+    runtime_tools
+}
+
+/// Health check: start the server, send `initialize`, check for a valid response, then kill it.
+/// Returns (server_name, is_healthy, tool_count_or_error_message).
+pub async fn check_server_health(config: &McpServerConfig) -> (String, bool, String) {
+    match McpConnection::start(config.clone()).await {
+        Ok(mut conn) => {
+            match conn.initialize().await {
+                Ok(_) => {
+                    let tools = conn.list_tools().await.unwrap_or_default();
+                    let count = tools.len();
+                    conn.shutdown();
+                    (config.name.clone(), true, format!("{count} tools"))
+                }
+                Err(e) => {
+                    conn.shutdown();
+                    (config.name.clone(), false, format!("init failed: {e}"))
+                }
+            }
+        }
+        Err(e) => (config.name.clone(), false, format!("start failed: {e}")),
+    }
+}
+
+/// Check health of all configured MCP servers
+pub async fn check_all_servers_health(cwd: &Path) -> Vec<(String, bool, String)> {
+    let configs = load_mcp_configs(cwd);
+    let mut results = Vec::new();
+    for config in &configs {
+        results.push(check_server_health(config).await);
+    }
+    results
 }

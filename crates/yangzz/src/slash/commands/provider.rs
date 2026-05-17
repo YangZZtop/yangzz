@@ -107,6 +107,14 @@ impl SlashCommand for ProviderCommand {
                     edit_provider(rest);
                 }
             }
+            "models" => {
+                if rest.is_empty() {
+                    // Show models for current provider
+                    show_provider_models(ctx.current_provider.name(), ctx);
+                } else {
+                    show_provider_models(rest, ctx);
+                }
+            }
             other => switch_provider(other, ctx),
         }
         Outcome::Continue
@@ -134,6 +142,7 @@ fn show_current_and_usage(ctx: &CommandContext) {
     emitln!();
     emitln!("  {BOLD}可用操作：{RESET}");
     emitln!("    {GOLD}/provider list{RESET}              {DIM}列出全部{RESET}");
+    emitln!("    {GOLD}/provider models [name]{RESET}     {DIM}查看可用模型（从 API 获取）{RESET}");
     emitln!("    {GOLD}/provider add{RESET}               {DIM}添加新的（交互式）{RESET}");
     emitln!("    {GOLD}/provider edit <name>{RESET}       {DIM}改字段{RESET}");
     emitln!("    {GOLD}/provider rename <old> <new>{RESET} {DIM}改名{RESET}");
@@ -154,6 +163,7 @@ fn list_providers(ctx: &CommandContext) {
         "  {BOLD}已配置的 provider{RESET} {DIM}({} 个){RESET}",
         s.providers.len()
     );
+    emitln!("  {DIM}提示：/provider models <name> 查看可用模型{RESET}");
     emitln!();
     for p in &s.providers {
         let marker = if p.name.eq_ignore_ascii_case(active) {
@@ -173,6 +183,98 @@ fn list_providers(ctx: &CommandContext) {
             model,
             fmt
         );
+    }
+    emitln!();
+}
+
+/// Fetch and display all available models from a specific provider
+fn show_provider_models(name: &str, ctx: &CommandContext) {
+    use yangzz_core::config::{self, Settings};
+    use yangzz_core::config::settings::CliOverrides;
+
+    let settings = Settings::load(CliOverrides::default());
+
+    // Find the provider config
+    let provider_config = settings
+        .providers
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(name));
+
+    if provider_config.is_none() {
+        emitln!("  {RED}✖{RESET} Provider '{name}' 不存在。用 /provider list 查看已配置的。");
+        return;
+    }
+
+    emitln!();
+    emitln!("  {BOLD}获取 {BOLD_GOLD}{name}{RESET}{BOLD} 的可用模型…{RESET}");
+
+    // Resolve the provider
+    let mut tmp_settings = settings.clone();
+    tmp_settings.provider = Some(name.to_string());
+    let provider = match config::resolve_provider(&tmp_settings) {
+        Ok(p) => p,
+        Err(e) => {
+            emitln!("  {RED}✖{RESET} 无法连接: {e}");
+            return;
+        }
+    };
+
+    // Fetch models with timeout
+    let models = crate::slash::block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            provider.list_models(),
+        )
+        .await
+    });
+
+    match models {
+        Ok(Ok(models)) if !models.is_empty() => {
+            emitln!("  {GREEN}✓{RESET} {BOLD}{}{RESET} 个可用模型：", models.len());
+            emitln!();
+            for m in &models {
+                let caps = yangzz_core::config::model_meta::lookup_model(m)
+                    .map(|meta| {
+                        let ctx_str = yangzz_core::config::model_meta::format_context(meta.context_window);
+                        let reasoning = if meta.supports_reasoning {
+                            let effort = meta.reasoning_effort.unwrap_or("med");
+                            format!(" · ◆{effort}")
+                        } else {
+                            String::new()
+                        };
+                        let price = yangzz_core::config::model_meta::format_price(meta.input_price);
+                        format!(" {DIM}[{ctx_str}{reasoning} · {price}/M]{RESET}")
+                    })
+                    .unwrap_or_default();
+                let is_current = m == ctx.current_model.as_str();
+                let mark = if is_current { format!(" {GREEN}← 当前{RESET}") } else { String::new() };
+                emitln!("    {GOLD}•{RESET} {m}{caps}{mark}");
+            }
+            emitln!();
+            emitln!("  {DIM}切换: /model <模型名>{RESET}");
+        }
+        Ok(Ok(_)) => {
+            emitln!("  {DIM}(API 返回空列表 — 该 provider 可能不支持 /v1/models 端点){RESET}");
+            // Show fallback
+            let fallback = config::fallback_models_for_provider(
+                &settings,
+                name,
+                provider.default_model(),
+            );
+            if !fallback.is_empty() {
+                emitln!("  {DIM}已知模型（来自配置）：{RESET}");
+                for m in &fallback {
+                    emitln!("    {GOLD}•{RESET} {m}");
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            emitln!("  {RED}✖{RESET} 获取失败: {e}");
+            emitln!("  {DIM}(可能是网络问题或该 provider 不支持 /v1/models){RESET}");
+        }
+        Err(_) => {
+            emitln!("  {RED}✖{RESET} 超时（15s）— provider 无响应");
+        }
     }
     emitln!();
 }

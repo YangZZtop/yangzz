@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="yangzz",
-    version="0.4.1",
+    version="0.5.0",
     description="Python SDK for yangzz CLI - programmatic access to the agentic loop",
     packages=find_packages(),
     python_requires=">=3.8",

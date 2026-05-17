@@ -157,6 +157,19 @@ impl AnthropicProvider {
             body["stream"] = serde_json::json!(true);
         }
 
+        // Extended thinking (Anthropic Claude 4+ style)
+        if let Some(budget) = request.thinking_budget {
+            if budget > 0 {
+                body["thinking"] = serde_json::json!({
+                    "type": "enabled",
+                    "budget_tokens": budget
+                });
+                // When thinking is enabled, Anthropic requires max_tokens to
+                // include the thinking budget
+                body["max_tokens"] = serde_json::json!(budget + request.max_tokens);
+            }
+        }
+
         body
     }
 
@@ -390,5 +403,38 @@ impl Provider for AnthropicProvider {
             stop_reason: final_stop,
             model: final_model,
         })
+    }
+
+    /// List available models. Anthropic's official API doesn't have /v1/models,
+    /// but many relay providers (sub2api, kiro, etc.) do support it on the same
+    /// base_url. We try it first; on failure, return a curated list of known
+    /// Claude models.
+    async fn list_models(&self) -> Result<Vec<String>, ProviderError> {
+        // Try /v1/models (works on many relays even with anthropic format).
+        // The relay might accept either x-api-key or Authorization: Bearer —
+        // our transport already sends x-api-key, which most relays accept.
+        if let Ok(resp) = self.transport.get_json("/v1/models").await {
+            if let Some(data) = resp.get("data").and_then(|d| d.as_array()) {
+                let mut models: Vec<String> = data
+                    .iter()
+                    .filter_map(|item| item.get("id").and_then(|v| v.as_str()))
+                    .map(|s| s.to_string())
+                    .collect();
+                if !models.is_empty() {
+                    models.sort();
+                    return Ok(models);
+                }
+            }
+        }
+
+        // Fallback: known Claude models
+        Ok(vec![
+            "claude-opus-4-7".to_string(),
+            "claude-opus-4-6".to_string(),
+            "claude-sonnet-4-5-20250514".to_string(),
+            "claude-sonnet-4-20250514".to_string(),
+            "claude-3.5-sonnet-20241022".to_string(),
+            "claude-3.5-haiku-20241022".to_string(),
+        ])
     }
 }

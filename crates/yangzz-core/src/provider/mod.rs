@@ -25,6 +25,10 @@ pub struct CreateMessageRequest {
     pub max_tokens: u32,
     pub temperature: Option<f32>,
     pub tools: Vec<ToolDefinition>,
+    /// Thinking/reasoning token budget (for models that support extended thinking)
+    pub thinking_budget: Option<u32>,
+    /// Reasoning effort: "low", "medium", "high"
+    pub reasoning_effort: Option<String>,
 }
 
 /// Tool definition sent to the API

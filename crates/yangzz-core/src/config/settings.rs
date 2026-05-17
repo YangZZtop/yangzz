@@ -2,6 +2,42 @@ use super::presets::{detect_provider_by_key, detect_provider_by_url, find_preset
 use crate::provider::ApiFormat;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::sync::Mutex;
+
+// ── Runtime thinking/reasoning state (mutable at runtime via /thinking command) ──
+static RUNTIME_THINKING_BUDGET: Mutex<Option<u32>> = Mutex::new(None);
+static RUNTIME_REASONING_EFFORT: Mutex<Option<String>> = Mutex::new(None);
+static RUNTIME_THINKING_INITIALIZED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Get the current runtime thinking budget
+pub fn get_runtime_thinking_budget() -> Option<u32> {
+    RUNTIME_THINKING_BUDGET.lock().ok().and_then(|g| *g)
+}
+
+/// Get the current runtime reasoning effort
+pub fn get_runtime_reasoning_effort() -> Option<String> {
+    RUNTIME_REASONING_EFFORT.lock().ok().and_then(|g| g.clone())
+}
+
+/// Set runtime thinking parameters (called by /thinking command)
+pub fn set_runtime_thinking(budget: Option<u32>, effort: Option<String>) {
+    if let Ok(mut g) = RUNTIME_THINKING_BUDGET.lock() {
+        *g = budget;
+    }
+    if let Ok(mut g) = RUNTIME_REASONING_EFFORT.lock() {
+        *g = effort;
+    }
+}
+
+/// Initialize runtime thinking from settings (called once at startup)
+pub fn init_runtime_thinking(settings: &Settings) {
+    if RUNTIME_THINKING_INITIALIZED.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    RUNTIME_THINKING_INITIALIZED.store(true, std::sync::atomic::Ordering::Relaxed);
+    set_runtime_thinking(settings.thinking_budget, settings.reasoning_effort.clone());
+}
 
 /// Application settings — merged from all sources
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

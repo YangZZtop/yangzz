@@ -185,6 +185,20 @@ impl OpenAiCompatProvider {
             body["stream_options"] = serde_json::json!({"include_usage": true});
         }
 
+        // Reasoning effort (OpenAI o3/o4/GPT-5 style)
+        if let Some(ref effort) = request.reasoning_effort {
+            if effort != "off" {
+                body["reasoning_effort"] = serde_json::json!(effort);
+            }
+        }
+
+        // Thinking budget as max_completion_tokens (some providers use this)
+        if let Some(budget) = request.thinking_budget {
+            if budget > 0 {
+                body["max_completion_tokens"] = serde_json::json!(budget + request.max_tokens);
+            }
+        }
+
         body
     }
 

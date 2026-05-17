@@ -126,6 +126,9 @@ pub async fn run(
     // ── Welcome ──
     banner::print_welcome(&current_model, provider.name(), env!("CARGO_PKG_VERSION"));
 
+    // Initialize runtime thinking from config
+    yangzz_core::config::settings::init_runtime_thinking(settings);
+
     // ── Auto-resume: offer to continue recent session ──
     if let Some(prev) = Session::load_latest() {
         if !prev.messages.is_empty() {
@@ -584,6 +587,8 @@ async fn generate_title(
         max_tokens: 60,
         temperature: Some(0.3),
         tools: vec![],
+        thinking_budget: None,
+        reasoning_effort: None,
     };
     let response = provider.create_message(&request).await?;
     let title = response

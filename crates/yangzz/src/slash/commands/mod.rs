@@ -14,6 +14,7 @@ mod meta;
 pub(crate) mod provider;
 mod skill;
 mod task;
+mod thinking;
 mod tool;
 
 pub fn register_all(r: &mut Registry) {
@@ -38,6 +39,7 @@ pub fn register_all(r: &mut Registry) {
     r.register(Box::new(skill::SkillCommand));
     r.register(Box::new(skill::SkillsCommand));
     r.register(Box::new(tool::ToolCommand));
+    r.register(Box::new(thinking::ThinkingCommand));
     r.register(Box::new(meta::HelpCommand));
     r.register(Box::new(meta::GuideCommand));
     r.register(Box::new(meta::MigrateCommand));

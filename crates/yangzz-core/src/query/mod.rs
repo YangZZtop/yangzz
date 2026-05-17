@@ -306,6 +306,8 @@ pub async fn run_agentic_loop_bounded(
             max_tokens,
             temperature: None,
             tools: tool_defs.clone(),
+            thinking_budget: crate::config::settings::get_runtime_thinking_budget(),
+            reasoning_effort: crate::config::settings::get_runtime_reasoning_effort(),
         };
 
         // Pre-send cost estimate (show on first turn only to avoid noise)
@@ -700,6 +702,8 @@ async fn compact_messages_with_summary(
         max_tokens: 1024,
         temperature: Some(0.0),
         tools: vec![],
+        thinking_budget: None,
+        reasoning_effort: None,
     };
 
     let summary = match provider.create_message(&request).await {

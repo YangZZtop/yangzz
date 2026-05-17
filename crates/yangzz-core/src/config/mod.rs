@@ -348,6 +348,30 @@ pub fn fallback_models_for_provider(
         }
     }
 
+    // Anthropic-format providers: include known Claude models as fallback
+    let is_anthropic_format = settings
+        .providers
+        .iter()
+        .find(|p| p.name.eq_ignore_ascii_case(provider_name))
+        .and_then(|p| p.api_format.as_deref())
+        .is_some_and(|fmt| fmt == "anthropic");
+
+    if is_anthropic_format
+        || detect_provider_family(provider_name) == Some("anthropic")
+        || detect_provider_family(provider_default_model) == Some("anthropic")
+    {
+        for model in [
+            "claude-opus-4-7",
+            "claude-opus-4-6",
+            "claude-sonnet-4-5-20250514",
+            "claude-sonnet-4-20250514",
+            "claude-3.5-sonnet-20241022",
+            "claude-3.5-haiku-20241022",
+        ] {
+            push_unique_model(&mut models, model.to_string());
+        }
+    }
+
     if let Some(model) = configured_default {
         push_unique_model(&mut models, model);
     }

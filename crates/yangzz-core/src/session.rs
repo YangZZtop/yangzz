@@ -45,7 +45,10 @@ impl Session {
         self.updated_at = Utc::now().to_rfc3339();
         let path = Self::storage_dir().join(format!("{}.json", self.id));
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, json)?;
+        // Atomic write: write to .tmp then rename to avoid corruption on crash
+        let tmp_path = path.with_extension("json.tmp");
+        std::fs::write(&tmp_path, &json)?;
+        std::fs::rename(&tmp_path, &path)?;
         Ok(())
     }
 

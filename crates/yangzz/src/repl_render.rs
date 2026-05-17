@@ -32,7 +32,7 @@ impl ReplRenderer {
         pb.set_style(
             indicatif::ProgressStyle::default_spinner()
                 .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])
-                .template("  {spinner:.cyan} {msg}")
+                .template("  {spinner:.cyan} {msg} {elapsed_precise:.dim}")
                 .unwrap(),
         );
         pb.set_message(msg.to_string());
@@ -102,13 +102,13 @@ impl ReplRenderer {
         let has_md = Self::has_markdown(&text);
 
         if counter_mode {
-            print!("\r\x1b[2K");
-            for _ in 0..max_erase.min(self.streaming_lines) {
-                print!("\x1b[A\x1b[2K");
+            // Long output was streamed directly — just ensure it ends with newline.
+            // Don't try to erase and reformat (it's already scrolled past).
+            if !raw.ends_with('\n') {
+                println!();
             }
-            let _ = io::stdout().flush();
-            self.render_final(&text, has_md);
         } else if has_md {
+            // Short output with markdown: erase raw text, re-render formatted.
             print!("\r");
             for _ in 0..self.streaming_lines {
                 print!("\x1b[A\x1b[2K");
@@ -146,7 +146,8 @@ impl ReplRenderer {
             "file_edit" | "multi_edit" | "parallel_edit" => "🔧",
             "grep" => "🔍",
             "glob" | "list_dir" | "tree" => "📂",
-            "fetch" => "🌐",
+            "fetch" | "browser" => "🌐",
+            "web_search" => "🔎",
             "sub_agent" => "🤖",
             "ask_user" => "💬",
             _ => "●",
@@ -225,14 +226,13 @@ impl Renderer for ReplRenderer {
         let max_erasable = term_height.saturating_sub(2);
 
         if self.streaming_lines <= max_erasable {
+            // Short output: print inline (will be erased + reformatted later if markdown)
             print!("{text}");
             let _ = io::stdout().flush();
         } else {
-            print!(
-                "\r\x1b[2K  {DIM}[streaming… {} lines, {} chars]{RESET}",
-                self.streaming_text.lines().count(),
-                self.streaming_text.len()
-            );
+            // Long output: stream directly to terminal in real-time.
+            // Print the new delta text as it arrives — user sees it immediately.
+            print!("{text}");
             let _ = io::stdout().flush();
         }
     }
@@ -304,6 +304,11 @@ impl Renderer for ReplRenderer {
 
     fn render_complete(&mut self) {
         self.flush_markdown();
+        // If no text was streamed at all, show a subtle indicator so user
+        // knows the response ended (prevents "nothing happened" confusion)
+        if self.streaming_text.is_empty() && self.first_token {
+            self.stop_spinner();
+        }
         println!();
     }
 
@@ -441,6 +446,22 @@ fn tool_context_msg(name: &str, input: &serde_json::Value) -> String {
                 format!("Fetching {short}")
             } else {
                 "Fetching…".into()
+            }
+        }
+        "browser" => {
+            if let Some(url) = input.get("url").and_then(|v| v.as_str()) {
+                let short: String = url.chars().take(50).collect();
+                format!("Reading {short}")
+            } else {
+                "Opening page…".into()
+            }
+        }
+        "web_search" => {
+            if let Some(q) = input.get("query").and_then(|v| v.as_str()) {
+                let short: String = q.chars().take(40).collect();
+                format!("Searching: {short}")
+            } else {
+                "Searching…".into()
             }
         }
         "list_dir" | "tree" => {

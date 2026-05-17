@@ -64,6 +64,31 @@ impl SlashCommand for StatusCommand {
             emitln!("  {RED}✖{RESET} /status 不接受参数");
             return Outcome::Continue;
         }
+        // Show detailed stats including context window usage
+        emitln!();
+        emitln!("  {BOLD}Session Stats{RESET}");
+        emitln!("    {GOLD}Model:{RESET}    {} via {}", ctx.stats.model, ctx.stats.provider);
+        emitln!("    {GOLD}Turns:{RESET}    {}", ctx.stats.total_turns);
+        emitln!("    {GOLD}Tokens:{RESET}   {} in / {} out (total: {})",
+            format_tokens(ctx.stats.total_input_tokens),
+            format_tokens(ctx.stats.total_output_tokens),
+            format_tokens(ctx.stats.total_input_tokens + ctx.stats.total_output_tokens));
+        emitln!("    {GOLD}Cost:{RESET}     ${:.4}", ctx.stats.total_cost_usd);
+        emitln!("    {GOLD}Messages:{RESET} {}", ctx.messages.len());
+        // Context window usage
+        if ctx.stats.context_used > 0 {
+            let ratio = ctx.stats.context_ratio();
+            let pct = (ratio * 100.0) as u32;
+            let ctx_max = yangzz_core::config::model_meta::format_context(ctx.stats.context_window);
+            let level = yangzz_core::memory::MemoryLevel::from_usage(ratio);
+            let color = if ratio < 0.50 { GREEN } else if ratio < 0.80 { GOLD } else { RED };
+            emitln!("    {GOLD}Context:{RESET}  {color}{}{RESET} / {} ({color}{pct}%{RESET}) — Memory: {}",
+                format_tokens(ctx.stats.context_used), ctx_max, level.label());
+        } else {
+            let ctx_max = yangzz_core::config::model_meta::format_context(ctx.stats.context_window);
+            emitln!("    {GOLD}Context:{RESET}  0 / {} (0%)", ctx_max);
+        }
+        emitln!();
         status::emit_status_bar(ctx.stats);
         Outcome::Continue
     }

@@ -13,10 +13,17 @@ pub struct SessionStats {
     pub total_cost_usd: f64,
     pub model: String,
     pub provider: String,
+    /// Context window size for the current model (tokens)
+    pub context_window: u64,
+    /// Estimated tokens currently in the conversation context
+    pub context_used: u32,
 }
 
 impl SessionStats {
     pub fn new(model: &str, provider: &str) -> Self {
+        let context_window = model_meta::lookup_model(model)
+            .map(|m| m.context_window)
+            .unwrap_or(128_000);
         Self {
             total_input_tokens: 0,
             total_output_tokens: 0,
@@ -24,6 +31,8 @@ impl SessionStats {
             total_cost_usd: 0.0,
             model: model.to_string(),
             provider: provider.to_string(),
+            context_window,
+            context_used: 0,
         }
     }
 
@@ -31,11 +40,30 @@ impl SessionStats {
         self.total_input_tokens += input;
         self.total_output_tokens += output;
         self.total_turns += 1;
+        // Track the latest input_tokens as approximate context usage
+        // (input_tokens includes the full conversation history sent to the model)
+        self.context_used = input;
         // Use real model pricing if available, fallback to generic estimate
         let (ip, op) = model_meta::lookup_model(&self.model)
             .map(|m| (m.input_price, m.output_price))
             .unwrap_or((3.0, 15.0));
         self.total_cost_usd += (input as f64 * ip + output as f64 * op) / 1_000_000.0;
+    }
+
+    /// Context usage ratio (0.0 - 1.0)
+    pub fn context_ratio(&self) -> f64 {
+        if self.context_window == 0 {
+            return 0.0;
+        }
+        self.context_used as f64 / self.context_window as f64
+    }
+
+    /// Update model (also refreshes context_window)
+    pub fn set_model(&mut self, model: &str) {
+        self.model = model.to_string();
+        self.context_window = model_meta::lookup_model(model)
+            .map(|m| m.context_window)
+            .unwrap_or(128_000);
     }
 }
 
@@ -105,6 +133,15 @@ fn status_bar_lines(stats: &SessionStats) -> Vec<String> {
         parts.push(format!("{NEON_YELLOW}0 {}{FG_DEF}", t().tokens_label));
     }
 
+    // Context usage bar — shows how full the context window is
+    if stats.context_used > 0 && stats.context_window > 0 {
+        let ratio = stats.context_ratio();
+        let ctx_bar = context_bar(ratio);
+        let ctx_label = format_tokens(stats.context_used);
+        let ctx_max = model_meta::format_context(stats.context_window);
+        parts.push(format!("{ctx_bar} {DIM}{ctx_label}/{ctx_max}{FG_DEF}"));
+    }
+
     // Cost — neon orange
     if stats.total_cost_usd > 0.0001 {
         parts.push(format!(
@@ -171,6 +208,28 @@ pub fn render_turn_info(duration_secs: f64) {
     let dur = format_duration(duration_secs);
     println!();
     println!("  {DIM}{} {dur}{RESET}", t().cooked_for);
+}
+
+/// Compact context usage bar: ████░░░░ 45%
+/// Color changes based on usage: green < 50%, yellow 50-80%, red > 80%
+fn context_bar(ratio: f64) -> String {
+    let bar_width = 8;
+    let filled = ((ratio * bar_width as f64).round() as usize).min(bar_width);
+    let empty = bar_width - filled;
+
+    let color = if ratio < 0.50 {
+        "\x1b[38;5;82m" // green
+    } else if ratio < 0.80 {
+        "\x1b[38;5;220m" // yellow
+    } else {
+        "\x1b[38;5;196m" // red
+    };
+
+    let bar_filled: String = "█".repeat(filled);
+    let bar_empty: String = "░".repeat(empty);
+    let pct = (ratio * 100.0) as u32;
+
+    format!("{color}{bar_filled}\x1b[38;5;240m{bar_empty}{FG_DEF} {color}{pct}%{FG_DEF}")
 }
 
 /// Friendly model name: claude-sonnet-4-20250514 → Sonnet 4

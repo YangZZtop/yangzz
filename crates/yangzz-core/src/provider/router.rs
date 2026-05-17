@@ -537,21 +537,19 @@ pub fn parse_directives(input: &str) -> DirectiveParseResult {
         }
 
         // Check for assignment verb
-        let has_verb = assign_verbs.iter().any(|v| seg.contains(v));
+        let _has_verb = assign_verbs.iter().any(|v| seg.contains(v));
 
         // If we found both model and domain (with or without verb), it's a directive
         if let (Some(model), Some(domain)) = (found_model, found_domain) {
-            if has_verb || true {
-                // Even without explicit verb, "Claude前端" is clear enough
-                directives.push(RoleDirective {
-                    model_hint: model.to_string(),
-                    domain,
-                });
+            // Even without explicit verb, "Claude前端" is clear enough
+            directives.push(RoleDirective {
+                model_hint: model.to_string(),
+                domain,
+            });
 
-                // Find this segment in the original input to mark for stripping
-                if let Some(start) = input.to_lowercase().find(seg) {
-                    directive_spans.push((start, start + seg.len()));
-                }
+            // Find this segment in the original input to mark for stripping
+            if let Some(start) = input.to_lowercase().find(seg) {
+                directive_spans.push((start, start + seg.len()));
             }
         }
     }

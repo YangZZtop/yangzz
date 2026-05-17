@@ -29,8 +29,8 @@ const SYSTEM_PROMPT: &str = r#"You are yangzz, an AI coding assistant running in
 
 You have access to these tools:
 bash, file_read, file_write, file_edit, file_append, multi_edit, parallel_edit,
-grep, glob, list_dir, tree, fetch, ask_user, notebook_read, notebook_edit,
-code_graph, sub_agent, todo.
+grep, glob, list_dir, tree, fetch, web_search, browser, ask_user, notebook_read,
+notebook_edit, code_graph, sub_agent, todo.
 
 Guidelines:
 - Read files before editing to understand context. file_read returns the full file by default.
@@ -44,7 +44,10 @@ Guidelines:
   "list symbols in file Y". code_graph uses tree-sitter AST parsing (Rust/TS/TSX/Python)
   so it's faster and more accurate than text-level search, and it already excludes
   node_modules, venv, target, .git, dist, build.
-- Use fetch to retrieve web content.
+- Use fetch to retrieve raw content from a specific URL.
+- Use web_search to search the internet for documentation, solutions, or current information.
+- Use browser to open a URL and read its content in clean text (like reader mode).
+  Prefer browser over fetch when you need to read a web page's text content.
 - Use ask_user when you need clarification from the user.
 - Use notebook_read/notebook_edit for Jupyter notebooks.
 - Be concise in explanations. Show your work through tool usage.
@@ -140,8 +143,10 @@ pub async fn run(
                     println!(
                         "  {DIM}Previous session ({msg_count} messages, {ago}){RESET}"
                     );
-                    print!("  {SOFT_GOLD}Resume? [y/N]{RESET} ");
+                    println!("  {SOFT_GOLD}Resume? [y/N]{RESET} ");
                     let _ = io::stdout().flush();
+                    // Use a simple non-blocking approach: read one line from stdin
+                    // with a clear visual prompt so user knows we're waiting
                     let mut answer = String::new();
                     if io::stdin().read_line(&mut answer).is_ok()
                         && matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
@@ -149,6 +154,8 @@ pub async fn run(
                         messages = prev.messages.clone();
                         session = prev;
                         println!("  {GREEN}✓{RESET} {DIM}Resumed ({msg_count} messages){RESET}");
+                    } else {
+                        println!("  {DIM}Starting fresh session{RESET}");
                     }
                 }
             }
@@ -161,6 +168,10 @@ pub async fn run(
     let mut rl: Editor<crate::slash::readline_helper::YangzzHelper, FileHistory> =
         Editor::with_config(config).expect("Failed to init readline");
     rl.set_helper(Some(crate::slash::readline_helper::YangzzHelper::new()));
+
+    // Persist input history across sessions
+    let history_path = yangzz_core::paths::yangzz_dir().join("history");
+    let _ = rl.load_history(&history_path);
     // Gold chip ❯ + light warm background for input area (was 236, now 238 + white text)
     let prompt = format!("\x1b[48;5;178m\x1b[1;30m ❯ \x1b[0m ");
     let prompt_cont = format!("    ");
@@ -207,9 +218,13 @@ pub async fn run(
                     if is_continuation && !full_input.is_empty() {
                         break; // Submit what we have
                     }
+                    let _ = rl.save_history(&history_path);
                     return Ok(()); // exit REPL
                 }
-                Err(_) => return Ok(()),
+                Err(_) => {
+                    let _ = rl.save_history(&history_path);
+                    return Ok(());
+                }
             }
         }
 
@@ -240,8 +255,15 @@ pub async fn run(
                 );
                 let mut provider_models: Vec<select::ProviderModels> = Vec::new();
                 for ap in &available {
-                    let models = match ap.provider.list_models().await {
-                        Ok(models) if !models.is_empty() => models,
+                    // Timeout each provider's list_models to 10s — don't let a slow
+                    // provider block the entire picker
+                    let models = match tokio::time::timeout(
+                        std::time::Duration::from_secs(10),
+                        ap.provider.list_models(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(models)) if !models.is_empty() => models,
                         _ => config::fallback_models_for_provider(
                             &live_settings,
                             &ap.name,
@@ -298,6 +320,7 @@ pub async fn run(
                 CommandResult::Quit => {
                     session.messages = messages.clone();
                     let _ = session.save();
+                    let _ = rl.save_history(&history_path);
                     break;
                 }
                 CommandResult::FallThrough => {} // process as chat (skill command)

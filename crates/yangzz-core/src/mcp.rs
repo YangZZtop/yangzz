@@ -435,6 +435,38 @@ impl McpManager {
     pub fn tool_count(&self) -> usize {
         self.tools.len()
     }
+
+    /// Attempt to reconnect a specific MCP server by name.
+    /// Kills the old process and starts a fresh one.
+    pub async fn reconnect_server(&mut self, server_name: &str) -> anyhow::Result<()> {
+        // Find and remove the old connection
+        let idx = self
+            .connections
+            .iter()
+            .position(|c| c.config.name == server_name);
+
+        let config = if let Some(idx) = idx {
+            let mut old = self.connections.remove(idx);
+            old.shutdown();
+            old.config.clone()
+        } else {
+            return Err(anyhow::anyhow!("MCP server '{server_name}' not found"));
+        };
+
+        // Start a new connection
+        let mut conn = McpConnection::start(config).await?;
+
+        // Re-discover tools
+        if let Ok(server_tools) = conn.list_tools().await {
+            // Remove old tools from this server and add new ones
+            self.tools.retain(|t| t.server_name != server_name);
+            self.tools.extend(server_tools);
+        }
+
+        self.connections.push(conn);
+        info!("MCP server '{}' reconnected successfully", server_name);
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -480,16 +512,52 @@ impl Tool for McpRuntimeTool {
 
     async fn execute(&self, input: &Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let mut manager = self.manager.lock().await;
-        let result = manager
+
+        // First attempt
+        match manager
             .call_tool_on_server(&self.server_name, &self.tool_name, input)
             .await
-            .map_err(|e| {
-                ToolError::Execution(format!(
-                    "MCP tool '{}:{}' failed: {e}",
+        {
+            Ok(result) => return Ok(ToolOutput::success(result)),
+            Err(e) => {
+                let err_msg = e.to_string();
+                // If it looks like a connection issue, try to reconnect
+                if err_msg.contains("stdin closed")
+                    || err_msg.contains("stdout closed")
+                    || err_msg.contains("broken pipe")
+                    || err_msg.contains("not connected")
+                {
+                    warn!(
+                        "MCP server '{}' connection lost, attempting reconnect...",
+                        self.server_name
+                    );
+                    // Try to reconnect the server
+                    if let Err(reconnect_err) = manager.reconnect_server(&self.server_name).await {
+                        return Err(ToolError::Execution(format!(
+                            "MCP tool '{}:{}' failed and reconnect also failed: {err_msg} (reconnect: {reconnect_err})",
+                            self.server_name, self.tool_name
+                        )));
+                    }
+                    // Retry after reconnect
+                    match manager
+                        .call_tool_on_server(&self.server_name, &self.tool_name, input)
+                        .await
+                    {
+                        Ok(result) => return Ok(ToolOutput::success(result)),
+                        Err(e2) => {
+                            return Err(ToolError::Execution(format!(
+                                "MCP tool '{}:{}' failed after reconnect: {e2}",
+                                self.server_name, self.tool_name
+                            )));
+                        }
+                    }
+                }
+                return Err(ToolError::Execution(format!(
+                    "MCP tool '{}:{}' failed: {err_msg}",
                     self.server_name, self.tool_name
-                ))
-            })?;
-        Ok(ToolOutput::success(result))
+                )));
+            }
+        }
     }
 }
 

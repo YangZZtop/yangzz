@@ -1,78 +1,149 @@
-// ── ANSI escape codes — warm gold palette ──
+// ── ANSI escape codes — adaptive palette ──
 //
-//  Inspired by 薯条 SaaS dark theme: gold accent on dark background.
-//  Primary accent: warm gold (256-color 178 ≈ #D4A843)
-//  Secondary: soft green for success, red for errors, dim gray for secondary
+// Detects terminal background (light vs dark) and uses appropriate colors.
+// On light themes, uses darker saturated colors visible on white backgrounds.
+// On dark themes, uses bright neon colors that pop.
 //
+// User override: set YANGZZ_THEME=light or YANGZZ_THEME=dark
+
+use std::fmt;
+use std::sync::OnceLock;
+
+/// Terminal theme
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TermTheme {
+    Dark,
+    Light,
+}
+
+/// Detect terminal theme
+fn detect_theme() -> TermTheme {
+    // 1. Explicit user override
+    if let Ok(val) = std::env::var("YANGZZ_THEME") {
+        return match val.to_lowercase().as_str() {
+            "light" | "白" | "l" => TermTheme::Light,
+            _ => TermTheme::Dark,
+        };
+    }
+
+    // 2. COLORFGBG (set by rxvt, xterm, some terminals)
+    if let Ok(val) = std::env::var("COLORFGBG") {
+        if let Some(bg) = val.split(';').last() {
+            if let Ok(n) = bg.parse::<u32>() {
+                return if n >= 7 && n != 8 {
+                    TermTheme::Light
+                } else {
+                    TermTheme::Dark
+                };
+            }
+        }
+    }
+
+    // 3. macOS Terminal.app defaults to light profile
+    if let Ok(term) = std::env::var("TERM_PROGRAM") {
+        if term == "Apple_Terminal" {
+            return TermTheme::Light;
+        }
+    }
+
+    TermTheme::Dark
+}
+
+/// Cached theme
+pub fn theme() -> TermTheme {
+    static THEME: OnceLock<TermTheme> = OnceLock::new();
+    *THEME.get_or_init(detect_theme)
+}
+
+pub fn is_light_theme() -> bool {
+    theme() == TermTheme::Light
+}
+
+// ── Adaptive color type ──
+// Implements Display so it can be used directly in format!() strings.
+
+pub struct Color {
+    dark: &'static str,
+    light: &'static str,
+}
+
+impl Copy for Color {}
+impl Clone for Color {
+    fn clone(&self) -> Self { *self }
+}
+
+impl fmt::Display for Color {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if is_light_theme() {
+            f.write_str(self.light)
+        } else {
+            f.write_str(self.dark)
+        }
+    }
+}
+
+// ── Core escapes (theme-independent) ──
 pub const RESET: &str = "\x1b[0m";
 pub const BOLD: &str = "\x1b[1m";
-pub const DIM: &str = "\x1b[2m";
 pub const ITALIC: &str = "\x1b[3m";
+pub const CLEAR_LINE: &str = "\x1b[2K";
 
-// ── Brand colors (256-color for warm gold) ──
-pub const GOLD: &str = "\x1b[38;5;178m";
-pub const BOLD_GOLD: &str = "\x1b[1;38;5;178m";
-pub const SOFT_GOLD: &str = "\x1b[38;5;179m";
+// ── Adaptive colors ──
+// Used in format!() like: println!("  {DIM}text{RESET}")
 
-// ── Neon palette (256-color high-saturation) ──
-// Used for role differentiation and visual punch in status bar / dividers.
-pub const NEON_PINK: &str = "\x1b[38;5;201m"; // #FF00FF — user
-pub const BOLD_NEON_PINK: &str = "\x1b[1;38;5;201m";
-pub const NEON_CYAN: &str = "\x1b[38;5;51m"; // #00FFFF — assistant
-pub const BOLD_NEON_CYAN: &str = "\x1b[1;38;5;51m";
-pub const NEON_GREEN: &str = "\x1b[38;5;46m"; // #00FF00 — success/tool
-pub const BOLD_NEON_GREEN: &str = "\x1b[1;38;5;46m";
-pub const NEON_YELLOW: &str = "\x1b[38;5;226m"; // #FFFF00 — info
-pub const BOLD_NEON_YELLOW: &str = "\x1b[1;38;5;226m";
-pub const NEON_ORANGE: &str = "\x1b[38;5;208m"; // #FF8700 — accent
-pub const BOLD_NEON_ORANGE: &str = "\x1b[1;38;5;208m";
-pub const NEON_VIOLET: &str = "\x1b[38;5;141m"; // #AF87FF — divider/decoration
-pub const BOLD_NEON_VIOLET: &str = "\x1b[1;38;5;141m";
-pub const NEON_BLUE: &str = "\x1b[38;5;39m"; // #00AFFF — links/hints
-pub const BOLD_NEON_BLUE: &str = "\x1b[1;38;5;39m";
+pub static DIM: Color = Color { dark: "\x1b[2m", light: "\x1b[38;5;242m" };
+pub static GOLD: Color = Color { dark: "\x1b[38;5;178m", light: "\x1b[38;5;130m" };
+pub static BOLD_GOLD: Color = Color { dark: "\x1b[1;38;5;178m", light: "\x1b[1;38;5;130m" };
+pub static SOFT_GOLD: Color = Color { dark: "\x1b[38;5;179m", light: "\x1b[38;5;136m" };
 
-// ── Standard ANSI (fallback / semantic) ──
-pub const GREEN: &str = "\x1b[32m";
-pub const RED: &str = "\x1b[31m";
-pub const YELLOW: &str = "\x1b[33m";
-pub const MAGENTA: &str = "\x1b[35m";
-pub const BLUE: &str = "\x1b[34m";
-pub const CYAN: &str = "\x1b[36m";
-pub const WHITE: &str = "\x1b[37m";
-pub const BOLD_GREEN: &str = "\x1b[1;32m";
-pub const BOLD_RED: &str = "\x1b[1;31m";
-pub const BOLD_YELLOW: &str = "\x1b[1;33m";
-pub const BOLD_MAGENTA: &str = "\x1b[1;35m";
-pub const BOLD_BLUE: &str = "\x1b[1;34m";
-pub const BOLD_CYAN: &str = "\x1b[1;36m";
-pub const BG_DARK: &str = "\x1b[48;5;236m";
-pub const BG_INPUT: &str = "\x1b[48;5;235m"; // Slightly lighter dark bg for input line
-pub const CLEAR_LINE: &str = "\x1b[2K"; // Clear entire line
+pub static GREEN: Color = Color { dark: "\x1b[32m", light: "\x1b[38;5;28m" };
+pub static RED: Color = Color { dark: "\x1b[31m", light: "\x1b[38;5;160m" };
+pub static YELLOW: Color = Color { dark: "\x1b[33m", light: "\x1b[38;5;130m" };
+pub static MAGENTA: Color = Color { dark: "\x1b[35m", light: "\x1b[38;5;127m" };
+pub static BLUE: Color = Color { dark: "\x1b[34m", light: "\x1b[38;5;25m" };
+pub static CYAN: Color = Color { dark: "\x1b[36m", light: "\x1b[38;5;30m" };
+pub static WHITE: Color = Color { dark: "\x1b[37m", light: "\x1b[38;5;235m" };
 
-/// Print a subtle horizontal divider — used between conversation turns so
-/// the scrollback reads as discrete cards without a heavy frame.
-///
-/// Style: neon violet gradient dots, width clamped to terminal.
+pub static BOLD_GREEN: Color = Color { dark: "\x1b[1;32m", light: "\x1b[1;38;5;28m" };
+pub static BOLD_RED: Color = Color { dark: "\x1b[1;31m", light: "\x1b[1;38;5;160m" };
+pub static BOLD_YELLOW: Color = Color { dark: "\x1b[1;33m", light: "\x1b[1;38;5;130m" };
+pub static BOLD_MAGENTA: Color = Color { dark: "\x1b[1;35m", light: "\x1b[1;38;5;127m" };
+pub static BOLD_BLUE: Color = Color { dark: "\x1b[1;34m", light: "\x1b[1;38;5;25m" };
+pub static BOLD_CYAN: Color = Color { dark: "\x1b[1;36m", light: "\x1b[1;38;5;30m" };
+
+// Neon palette (status bar / accents)
+pub static NEON_PINK: Color = Color { dark: "\x1b[38;5;201m", light: "\x1b[38;5;162m" };
+pub static BOLD_NEON_PINK: Color = Color { dark: "\x1b[1;38;5;201m", light: "\x1b[1;38;5;162m" };
+pub static NEON_CYAN: Color = Color { dark: "\x1b[38;5;51m", light: "\x1b[38;5;30m" };
+pub static BOLD_NEON_CYAN: Color = Color { dark: "\x1b[1;38;5;51m", light: "\x1b[1;38;5;30m" };
+pub static NEON_GREEN: Color = Color { dark: "\x1b[38;5;46m", light: "\x1b[38;5;28m" };
+pub static BOLD_NEON_GREEN: Color = Color { dark: "\x1b[1;38;5;46m", light: "\x1b[1;38;5;28m" };
+pub static NEON_YELLOW: Color = Color { dark: "\x1b[38;5;226m", light: "\x1b[38;5;136m" };
+pub static BOLD_NEON_YELLOW: Color = Color { dark: "\x1b[1;38;5;226m", light: "\x1b[1;38;5;136m" };
+pub static NEON_ORANGE: Color = Color { dark: "\x1b[38;5;208m", light: "\x1b[38;5;166m" };
+pub static BOLD_NEON_ORANGE: Color = Color { dark: "\x1b[1;38;5;208m", light: "\x1b[1;38;5;166m" };
+pub static NEON_VIOLET: Color = Color { dark: "\x1b[38;5;141m", light: "\x1b[38;5;91m" };
+pub static BOLD_NEON_VIOLET: Color = Color { dark: "\x1b[1;38;5;141m", light: "\x1b[1;38;5;91m" };
+pub static NEON_BLUE: Color = Color { dark: "\x1b[38;5;39m", light: "\x1b[38;5;25m" };
+pub static BOLD_NEON_BLUE: Color = Color { dark: "\x1b[1;38;5;39m", light: "\x1b[1;38;5;25m" };
+
+// Backgrounds
+pub static BG_DARK: Color = Color { dark: "\x1b[48;5;236m", light: "\x1b[48;5;254m" };
+pub static BG_INPUT: Color = Color { dark: "\x1b[48;5;235m", light: "\x1b[48;5;255m" };
+
+/// Print a subtle horizontal divider
 pub fn print_divider() {
     let w = crossterm::terminal::size()
         .map(|(w, _)| w as usize)
         .unwrap_or(80);
     let inner = w.saturating_sub(4).min(76);
-    // Alternating violet / dim rule for a subtle gradient feel
     let rule: String = "─".repeat(inner);
     println!();
     println!("  {NEON_VIOLET}{DIM}{rule}{RESET}");
     println!();
 }
 
-// ── Semantic aliases (use these in UI code) ──
-pub const ACCENT: &str = GOLD;
-pub const BOLD_ACCENT: &str = BOLD_GOLD;
-pub const PROMPT: &str = BOLD_GOLD;
-pub const TOOL_COLOR: &str = SOFT_GOLD;
-pub const SUCCESS: &str = GREEN;
-pub const ERROR: &str = RED;
-pub const INFO: &str = SOFT_GOLD;
+// ── Utility functions ──
 
 /// Format duration in human-readable form
 pub fn format_duration(secs: f64) -> String {
@@ -100,10 +171,9 @@ pub fn format_tokens(n: u32) -> String {
 
 /// Format cost estimate
 pub fn format_cost(input_tokens: u32, output_tokens: u32) -> String {
-    // Rough estimate: $3/$15 per 1M tokens (Sonnet-class pricing)
     let cost = (input_tokens as f64 * 3.0 + output_tokens as f64 * 15.0) / 1_000_000.0;
     if cost < 0.01 {
-        format!("<$0.01")
+        "<$0.01".to_string()
     } else {
         format!("${:.2}", cost)
     }

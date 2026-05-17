@@ -36,8 +36,9 @@ pub struct PermissionManager {
 
 impl PermissionManager {
     pub fn new() -> Self {
+        let always_allow = load_persisted_permissions();
         Self {
-            always_allow: Mutex::new(HashSet::new()),
+            always_allow: Mutex::new(always_allow),
             mode: PermissionMode::Cli,
         }
     }
@@ -103,6 +104,8 @@ impl PermissionManager {
             PermissionAnswer::Always => {
                 let mut allowed = self.always_allow.lock().await;
                 allowed.insert(tool_name.to_string());
+                // Persist to disk so it survives restarts
+                save_persisted_permissions(&allowed);
                 Ok(true)
             }
             PermissionAnswer::No => Ok(false),
@@ -111,11 +114,14 @@ impl PermissionManager {
 }
 
 fn ask_via_stdin(tool_name: &str) -> Result<PermissionAnswer, String> {
-    eprintln!();
-    eprint!(
-        "  \x1b[38;5;208m⚠\x1b[0m \x1b[1m{tool_name}\x1b[0m requires permission  \x1b[2m[\x1b[32my\x1b[0;2m]es / [\x1b[31mn\x1b[0;2m]o / [\x1b[33ma\x1b[0;2m]lways\x1b[0m "
+    // Force flush stdout first — spinner output goes to stdout, so clear it
+    let _ = io::stdout().flush();
+    // Print a blank line to separate from any spinner residue
+    println!();
+    print!(
+        "  \x1b[38;5;208m⚠\x1b[0m \x1b[1m{tool_name}\x1b[0m requires permission  \x1b[2m[\x1b[32my\x1b[0;2m]es / [\x1b[31mn\x1b[0;2m]o / [\x1b[33ma\x1b[0;2m]lways\x1b[0m: "
     );
-    let _ = io::stderr().flush();
+    let _ = io::stdout().flush();
 
     let mut response = String::new();
     io::stdin()
@@ -129,11 +135,11 @@ fn ask_via_stdin(tool_name: &str) -> Result<PermissionAnswer, String> {
     };
 
     match answer {
-        PermissionAnswer::Yes => eprintln!("  \x1b[32m✓\x1b[0m \x1b[2mAllowed\x1b[0m"),
+        PermissionAnswer::Yes => println!("  \x1b[32m✓\x1b[0m \x1b[2mAllowed\x1b[0m"),
         PermissionAnswer::Always => {
-            eprintln!("  \x1b[32m✓\x1b[0m \x1b[2mAlways allowed for {tool_name}\x1b[0m")
+            println!("  \x1b[32m✓\x1b[0m \x1b[2mAlways allowed for {tool_name}\x1b[0m")
         }
-        PermissionAnswer::No => eprintln!("  \x1b[31m✖\x1b[0m \x1b[2mDenied\x1b[0m"),
+        PermissionAnswer::No => println!("  \x1b[31m✖\x1b[0m \x1b[2mDenied\x1b[0m"),
     }
 
     Ok(answer)
@@ -352,5 +358,43 @@ pub fn scan_for_secrets(text: &str) -> Vec<String> {
 impl Default for PermissionManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── Permission persistence ──
+// Stores "always allow" choices in ~/.yangzz/permissions.json
+// Scoped by project directory so different projects have independent permissions.
+
+fn permissions_path() -> std::path::PathBuf {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let project_hash = {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        cwd.to_string_lossy().hash(&mut hasher);
+        format!("{:016x}", hasher.finish())
+    };
+    crate::paths::yangzz_dir().join(format!("permissions-{}.json", &project_hash[..8]))
+}
+
+fn load_persisted_permissions() -> HashSet<String> {
+    let path = permissions_path();
+    if !path.exists() {
+        return HashSet::new();
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str::<Vec<String>>(&content)
+            .unwrap_or_default()
+            .into_iter()
+            .collect(),
+        Err(_) => HashSet::new(),
+    }
+}
+
+fn save_persisted_permissions(allowed: &HashSet<String>) {
+    let path = permissions_path();
+    crate::paths::ensure_yangzz_dir();
+    let list: Vec<&String> = allowed.iter().collect();
+    if let Ok(json) = serde_json::to_string_pretty(&list) {
+        let _ = std::fs::write(&path, json);
     }
 }

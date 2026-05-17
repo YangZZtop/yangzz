@@ -1,5 +1,6 @@
 mod ask_user;
 mod bash;
+mod browser;
 mod code_graph;
 mod fetch;
 mod file_append;
@@ -15,9 +16,11 @@ mod parallel_edit;
 mod sub_agent;
 mod todo;
 mod tree;
+mod web_search;
 
 pub use ask_user::AskUserTool;
 pub use bash::BashTool;
+pub use browser::BrowserTool;
 pub use code_graph::CodeGraphTool;
 pub use fetch::FetchTool;
 pub use file_append::FileAppendTool;
@@ -33,3 +36,4 @@ pub use parallel_edit::ParallelEditTool;
 pub use sub_agent::SubAgentTool;
 pub use todo::TodoTool;
 pub use tree::TreeTool;
+pub use web_search::WebSearchTool;

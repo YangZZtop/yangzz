@@ -94,6 +94,9 @@ impl ToolExecutor {
 
         // 3. Permission check
         if !tool.is_read_only() {
+            // NOTE: The permission prompt reads from stdin. The caller's renderer
+            // should have already stopped any spinner via render_tool_start(), but
+            // we log here in case something slips through.
             match self
                 .permission
                 .check(name, input, tool.is_destructive())

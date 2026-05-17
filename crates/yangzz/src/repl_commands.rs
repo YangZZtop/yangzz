@@ -99,7 +99,7 @@ pub(crate) fn switch_model_provider(
             let old_provider = current_provider.name().to_string();
             *current_model = new_model.to_string();
             *current_provider = new_provider;
-            stats.model = current_model.clone();
+            stats.set_model(current_model);
             stats.provider = current_provider.name().to_string();
 
             if old_provider != current_provider.name() {

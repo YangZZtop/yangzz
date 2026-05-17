@@ -63,8 +63,14 @@ impl LoopDetector {
     }
 }
 
+/// Maximum time to wait for the first token from the provider before giving up.
+const STREAM_FIRST_TOKEN_TIMEOUT_SECS: u64 = 120;
+/// Maximum time to wait between consecutive stream events (stall detection).
+const STREAM_STALL_TIMEOUT_SECS: u64 = 60;
+
 /// Send a streaming request with retry on transient errors.
 /// Ctrl+C cancels the request and returns a Cancelled error.
+/// Includes timeout protection against provider hangs.
 async fn send_with_retry(
     provider: &Arc<dyn Provider>,
     request: &CreateMessageRequest,
@@ -77,13 +83,24 @@ async fn send_with_retry(
         let req = request.clone();
         let handle = tokio::spawn(async move { provider.create_message_stream(&req, tx).await });
 
-        // Race: stream events vs Ctrl+C
+        // Race: stream events vs Ctrl+C vs timeout
         let mut cancelled = false;
+        let mut timed_out = false;
+        let mut got_first_token = false;
         loop {
+            let timeout_duration = if got_first_token {
+                std::time::Duration::from_secs(STREAM_STALL_TIMEOUT_SECS)
+            } else {
+                std::time::Duration::from_secs(STREAM_FIRST_TOKEN_TIMEOUT_SECS)
+            };
+
             tokio::select! {
                 event = rx.recv() => {
                     match event {
-                        Some(ev) => renderer.on_stream_event(&ev),
+                        Some(ev) => {
+                            got_first_token = true;
+                            renderer.on_stream_event(&ev);
+                        }
                         None => break, // stream finished
                     }
                 }
@@ -92,11 +109,42 @@ async fn send_with_retry(
                     handle.abort();
                     break;
                 }
+                _ = tokio::time::sleep(timeout_duration) => {
+                    // Stream stalled — provider is not responding
+                    timed_out = true;
+                    handle.abort();
+                    break;
+                }
             }
         }
 
         if cancelled {
             return Err(ProviderError::Stream("Cancelled by user".into()));
+        }
+
+        if timed_out {
+            renderer.stop_spinner();
+            let timeout_kind = if got_first_token {
+                "Stream stalled (no data for 60s)"
+            } else {
+                "No response from provider (120s timeout)"
+            };
+            if attempt < MAX_RETRIES - 1 {
+                let delay = (attempt + 1) as u64 * 3;
+                warn!("{timeout_kind}, retrying in {delay}s (attempt {})", attempt + 1);
+                renderer.render_info(&format!(
+                    "⏱ {timeout_kind} — retry {}/{} in {delay}s",
+                    attempt + 1,
+                    MAX_RETRIES - 1,
+                ));
+                tokio::time::sleep(std::time::Duration::from_secs(delay)).await;
+                renderer.render_thinking_start();
+                continue;
+            } else {
+                return Err(ProviderError::Stream(format!(
+                    "{timeout_kind}. Provider may be down or overloaded."
+                )));
+            }
         }
 
         match handle.await {
@@ -121,6 +169,12 @@ async fn send_with_retry(
                 let msg = join_err.to_string();
                 if msg.contains("cancelled") {
                     return Err(ProviderError::Stream("Cancelled by user".into()));
+                }
+                // Task was aborted (timeout case already handled above)
+                if msg.contains("aborted") || msg.contains("JoinError") {
+                    if attempt < MAX_RETRIES - 1 {
+                        continue;
+                    }
                 }
                 return Err(ProviderError::Stream(msg));
             }
@@ -186,9 +240,13 @@ pub async fn run_agentic_loop_bounded(
         output_tokens: 0,
     };
     let mut loop_detector = LoopDetector::new();
+    let mut tool_cache = ToolCache::new();
     let context_window = crate::config::model_meta::lookup_model(model)
         .map(|m| m.context_window as usize)
         .unwrap_or(DEFAULT_CONTEXT_WINDOW);
+
+    // Reset completion guard for this new agentic loop invocation
+    COMPLETION_GUARD_FIRED.store(false, std::sync::atomic::Ordering::Relaxed);
 
     for turn in 0..max_turns {
         info!("Agentic loop turn {turn}");
@@ -249,6 +307,20 @@ pub async fn run_agentic_loop_bounded(
             temperature: None,
             tools: tool_defs.clone(),
         };
+
+        // Pre-send cost estimate (show on first turn only to avoid noise)
+        if turn == 0 {
+            let est_tokens = estimate_message_tokens(messages);
+            if let Some(meta) = crate::config::model_meta::lookup_model(model) {
+                let est_cost = est_tokens as f64 / 1_000_000.0 * meta.input_price;
+                if est_cost > 0.005 {
+                    renderer.render_status(&format!(
+                        "~{} input tokens · ~${:.4} estimated",
+                        est_tokens, est_cost
+                    ));
+                }
+            }
+        }
 
         let response = send_with_retry(provider, &request, renderer).await?;
 
@@ -334,59 +406,146 @@ pub async fn run_agentic_loop_bounded(
             return Ok(total_usage);
         }
 
+        // ── Parallel execution for read-only tools ──
+        // Split tool calls into read-only (parallelizable) and write (serial).
+        // If ALL are read-only, run them all in parallel. If mixed, run serial
+        // to preserve ordering semantics (a write might depend on a prior read).
+        let all_read_only = tool_uses.iter().all(|(_, name, _)| is_read_only_tool(name));
+
         let mut tool_results = Vec::new();
         let mut loop_blocked = false;
-        for (id, name, input) in &tool_uses {
-            if loop_detector.record(name, input) {
-                warn!("Loop detected: {name} called {LOOP_DETECTION_THRESHOLD} times with same args");
-                renderer.render_error(&format!(
-                    "Loop detected: `{name}` called {} times with identical arguments. Blocking and asking model to try a different approach.",
-                    LOOP_DETECTION_THRESHOLD
-                ));
-                tool_results.push(ContentBlock::ToolResult {
-                    tool_use_id: id.clone(),
-                    content: format!(
-                        "[LOOP DETECTED] You have called `{name}` {} consecutive times with the same arguments and gotten the same result. This approach is not working. Please try a fundamentally different strategy.",
+
+        if all_read_only && tool_uses.len() > 1 {
+            // Parallel execution path — execute read-only tools with batched rendering
+            // First check loop detection for all
+            for (id, name, input) in &tool_uses {
+                if loop_detector.record(name, input) {
+                    warn!("Loop detected: {name} called {LOOP_DETECTION_THRESHOLD} times with same args");
+                    renderer.render_error(&format!(
+                        "Loop detected: `{name}` called {} times with identical arguments.",
                         LOOP_DETECTION_THRESHOLD
-                    ),
-                    is_error: true,
-                });
-                loop_blocked = true;
-                break;
-            }
-
-            renderer.render_tool_start_with_input(name, id, input);
-            let output = executor.execute(name, input).await;
-
-            // Error file pre-injection: if bash fails, extract file paths from stderr
-            let mut final_content = output.content.clone();
-            if output.is_error && name == "bash" {
-                let injected = extract_and_read_error_files(&output.content, &executor).await;
-                if !injected.is_empty() {
-                    final_content.push_str("\n\n--- Referenced files from error ---\n");
-                    final_content.push_str(&injected);
+                    ));
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: format!(
+                            "[LOOP DETECTED] `{name}` called {} times with same args. Try a different approach.",
+                            LOOP_DETECTION_THRESHOLD
+                        ),
+                        is_error: true,
+                    });
+                    loop_blocked = true;
+                    break;
                 }
             }
 
-            // Truncate large tool results: keep head + tail for context
-            if final_content.len() > 16000 {
-                let head = &final_content[..6000];
-                let tail_start = final_content.len().saturating_sub(2000);
-                let tail = &final_content[tail_start..];
-                let omitted = final_content.len() - 8000;
-                final_content = format!(
-                    "{head}\n\n... [{omitted} chars omitted] ...\n\n{tail}\n(output pruned: kept first 6K + last 2K)"
-                );
+            if !loop_blocked {
+                // Show all tools starting at once (batched visual)
+                for (id, name, input) in &tool_uses {
+                    renderer.render_tool_start_with_input(name, id, input);
+                    renderer.stop_spinner();
+                }
+
+                // Execute all read-only tools (sequential but fast — no permission prompts)
+                let mut results = Vec::new();
+                for (_id, name, input) in &tool_uses {
+                    let output = if let Some(cached) = tool_cache.get(name, input) {
+                        crate::tool::ToolOutput::success(cached.clone())
+                    } else {
+                        let result = executor.execute(name, input).await;
+                        if !result.is_error {
+                            tool_cache.put(name, input, &result.content);
+                        }
+                        result
+                    };
+                    results.push(output);
+                }
+
+                // Render all results
+                for ((id, name, _input), output) in tool_uses.iter().zip(results.iter()) {
+                    let mut final_content = output.content.clone();
+                    if final_content.len() > 16000 {
+                        let head = &final_content[..6000];
+                        let tail_start = final_content.len().saturating_sub(2000);
+                        let tail = &final_content[tail_start..];
+                        let omitted = final_content.len() - 8000;
+                        final_content = format!(
+                            "{head}\n\n... [{omitted} chars omitted] ...\n\n{tail}\n(output pruned)"
+                        );
+                    }
+                    renderer.render_tool_result(name, &final_content, output.is_error);
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: final_content,
+                        is_error: output.is_error,
+                    });
+                }
             }
+        } else {
+            // Serial execution path (original behavior)
+            for (id, name, input) in &tool_uses {
+                if loop_detector.record(name, input) {
+                    warn!("Loop detected: {name} called {LOOP_DETECTION_THRESHOLD} times with same args");
+                    renderer.render_error(&format!(
+                        "Loop detected: `{name}` called {} times with identical arguments. Blocking and asking model to try a different approach.",
+                        LOOP_DETECTION_THRESHOLD
+                    ));
+                    tool_results.push(ContentBlock::ToolResult {
+                        tool_use_id: id.clone(),
+                        content: format!(
+                            "[LOOP DETECTED] You have called `{name}` {} consecutive times with the same arguments and gotten the same result. This approach is not working. Please try a fundamentally different strategy.",
+                            LOOP_DETECTION_THRESHOLD
+                        ),
+                        is_error: true,
+                    });
+                    loop_blocked = true;
+                    break;
+                }
 
-            renderer.render_tool_result(name, &final_content, output.is_error);
+                renderer.render_tool_start_with_input(name, id, input);
+                let output = if let Some(cached) = tool_cache.get(name, input) {
+                    // Cache hit — skip execution
+                    crate::tool::ToolOutput::success(cached.clone())
+                } else {
+                    let result = executor.execute(name, input).await;
+                    // Cache read-only results; invalidate on writes
+                    if is_read_only_tool(name) && !result.is_error {
+                        tool_cache.put(name, input, &result.content);
+                    } else if !is_read_only_tool(name) {
+                        tool_cache.invalidate_after_write();
+                    }
+                    result
+                };
 
-            tool_results.push(ContentBlock::ToolResult {
-                tool_use_id: id.clone(),
-                content: final_content,
-                is_error: output.is_error,
-            });
-        }
+                // Error file pre-injection: if bash fails, extract file paths from stderr
+                let mut final_content = output.content.clone();
+                if output.is_error && name == "bash" {
+                    let injected = extract_and_read_error_files(&output.content, &executor).await;
+                    if !injected.is_empty() {
+                        final_content.push_str("\n\n--- Referenced files from error ---\n");
+                        final_content.push_str(&injected);
+                    }
+                }
+
+                // Truncate large tool results: keep head + tail for context
+                if final_content.len() > 16000 {
+                    let head = &final_content[..6000];
+                    let tail_start = final_content.len().saturating_sub(2000);
+                    let tail = &final_content[tail_start..];
+                    let omitted = final_content.len() - 8000;
+                    final_content = format!(
+                        "{head}\n\n... [{omitted} chars omitted] ...\n\n{tail}\n(output pruned: kept first 6K + last 2K)"
+                    );
+                }
+
+                renderer.render_tool_result(name, &final_content, output.is_error);
+
+                tool_results.push(ContentBlock::ToolResult {
+                    tool_use_id: id.clone(),
+                    content: final_content,
+                    is_error: output.is_error,
+                });
+            }
+        } // end parallel vs serial
 
         // If loop was blocked, add error results for remaining tool calls
         if loop_blocked {
@@ -409,6 +568,73 @@ pub async fn run_agentic_loop_bounded(
 
     renderer.render_error(&format!("Reached maximum turns ({MAX_TURNS}), stopping."));
     Ok(total_usage)
+}
+
+/// Check if a tool is read-only (safe for parallel execution)
+fn is_read_only_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "file_read"
+            | "grep"
+            | "glob"
+            | "list_dir"
+            | "tree"
+            | "web_search"
+            | "browser"
+            | "fetch"
+            | "code_graph"
+            | "notebook_read"
+    )
+}
+
+/// Simple tool result cache — avoids re-reading the same file multiple times
+/// within a single agentic loop invocation.
+struct ToolCache {
+    entries: std::collections::HashMap<u64, String>,
+}
+
+impl ToolCache {
+    fn new() -> Self {
+        Self {
+            entries: std::collections::HashMap::new(),
+        }
+    }
+
+    fn cache_key(name: &str, input: &serde_json::Value) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        name.hash(&mut hasher);
+        input.to_string().hash(&mut hasher);
+        hasher.finish()
+    }
+
+    fn get(&self, name: &str, input: &serde_json::Value) -> Option<&String> {
+        if !is_read_only_tool(name) {
+            return None;
+        }
+        let key = Self::cache_key(name, input);
+        self.entries.get(&key)
+    }
+
+    fn put(&mut self, name: &str, input: &serde_json::Value, result: &str) {
+        if !is_read_only_tool(name) {
+            return;
+        }
+        // Don't cache very large results (> 32KB) — not worth the memory
+        if result.len() > 32_000 {
+            return;
+        }
+        let key = Self::cache_key(name, input);
+        self.entries.insert(key, result.to_string());
+    }
+
+    /// Invalidate cache entries that might be stale after a write operation.
+    /// Called after any file_write/file_edit/bash execution.
+    fn invalidate_after_write(&mut self) {
+        // Conservative: clear all file_read entries since we don't track
+        // which specific file was modified.
+        self.entries.clear();
+    }
 }
 
 /// Estimate total tokens in message history

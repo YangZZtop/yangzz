@@ -1,6 +1,7 @@
 use super::format::*;
 use super::i18n::t;
 use dialoguer::{Input, Select, theme::ColorfulTheme};
+use yangzz_core::config::model_meta;
 
 /// A group of models from one provider
 pub struct ProviderModels {
@@ -51,7 +52,9 @@ pub fn select_model(
             } else {
                 String::new()
             };
-            items.push(format!("    {m}{mark}"));
+            // Show model capabilities inline if known
+            let caps = model_capabilities_str(m);
+            items.push(format!("    {m}{mark}{caps}"));
             if is_cur {
                 current_idx = Some(entries.len());
             }
@@ -61,8 +64,9 @@ pub fn select_model(
 
     // If current model not in any list, prepend it
     if current_idx.is_none() && !current_model.is_empty() {
+        let caps = model_capabilities_str(current_model);
         let line = format!(
-            "    {current_model} {GREEN}✓{RESET} {DIM}({0}){RESET}",
+            "    {current_model} {GREEN}✓{RESET}{caps} {DIM}({0}){RESET}",
             s.current_label
         );
         items.insert(0, line);
@@ -107,6 +111,32 @@ pub fn select_model(
     } else {
         Some((chosen_model.clone(), chosen_provider.clone()))
     }
+}
+
+/// Generate a compact capabilities string for a model (context, thinking, price)
+fn model_capabilities_str(model_name: &str) -> String {
+    let meta = match model_meta::lookup_model(model_name) {
+        Some(m) => m,
+        None => return String::new(),
+    };
+
+    let mut parts = Vec::new();
+
+    // Context window
+    let ctx = model_meta::format_context(meta.context_window);
+    parts.push(format!("{ctx}"));
+
+    // Thinking/reasoning support
+    if meta.supports_reasoning {
+        let effort = meta.reasoning_effort.unwrap_or("med");
+        parts.push(format!("◆{effort}"));
+    }
+
+    // Price (input only for brevity)
+    let price = model_meta::format_price(meta.input_price);
+    parts.push(format!("{price}/M"));
+
+    format!(" {DIM}[{}]{RESET}", parts.join(" · "))
 }
 
 /// Show command picker (like Claude Code slash command autocomplete)

@@ -206,7 +206,7 @@ fn switch_model(args: &str, ctx: &mut CommandContext) {
             let old_provider = ctx.current_provider.name().to_string();
             *ctx.current_model = new_model.to_string();
             *ctx.current_provider = new_provider;
-            ctx.stats.model = ctx.current_model.clone();
+            ctx.stats.set_model(ctx.current_model);
             ctx.stats.provider = ctx.current_provider.name().to_string();
 
             if old_provider != ctx.current_provider.name() {
@@ -265,11 +265,43 @@ fn add_provider() {
         temperature: None,
     };
 
-    match writer::add_provider(provider) {
+    match writer::add_provider(provider.clone()) {
         Ok(path) => {
             emitln!();
             emitln!("  {GREEN}✓{RESET} 已添加 {BOLD}{}{RESET}", answers[0]);
             emitln!("  {DIM}写入: {}{RESET}", path.display());
+
+            // Auto-fetch available models from the new provider
+            emitln!("  {DIM}正在获取可用模型列表…{RESET}");
+            let fetched = crate::slash::block_on(async {
+                fetch_provider_models(&provider).await
+            });
+            match fetched {
+                Ok(models) if !models.is_empty() => {
+                    emitln!("  {GREEN}✓{RESET} 该 provider 有 {BOLD}{}{RESET} 个可用模型：", models.len());
+                    for m in models.iter().take(15) {
+                        let caps = yangzz_core::config::model_meta::lookup_model(m)
+                            .map(|meta| {
+                                let ctx = yangzz_core::config::model_meta::format_context(meta.context_window);
+                                let reasoning = if meta.supports_reasoning { " ◆" } else { "" };
+                                format!(" {DIM}[{ctx}{reasoning}]{RESET}")
+                            })
+                            .unwrap_or_default();
+                        emitln!("    {GOLD}•{RESET} {m}{caps}");
+                    }
+                    if models.len() > 15 {
+                        emitln!("    {DIM}… 还有 {} 个{RESET}", models.len() - 15);
+                    }
+                }
+                Ok(_) => {
+                    emitln!("  {DIM}(未获取到模型列表，可能需要手动指定){RESET}");
+                }
+                Err(e) => {
+                    emitln!("  {DIM}(获取模型列表失败: {e} — 不影响使用){RESET}");
+                }
+            }
+
+            emitln!();
             emitln!("  {DIM}→ /provider {} 切到它{RESET}", answers[0]);
             emitln!();
         }
@@ -277,6 +309,26 @@ fn add_provider() {
             emitln!("  {RED}✖{RESET} 添加失败: {e}");
         }
     }
+}
+
+/// Try to fetch models from a newly added provider
+async fn fetch_provider_models(provider: &ExtraProvider) -> Result<Vec<String>, String> {
+    use yangzz_core::config::{self, Settings};
+
+    let tmp_settings = Settings {
+        provider: Some(provider.name.clone()),
+        api_key: Some(provider.api_key.clone()),
+        base_url: Some(provider.base_url.clone()),
+        api_format: provider.api_format.clone(),
+        model: provider.default_model.clone(),
+        providers: vec![provider.clone()],
+        ..Settings::default()
+    };
+
+    let resolved = config::resolve_provider(&tmp_settings)
+        .map_err(|e| format!("{e}"))?;
+
+    resolved.list_models().await.map_err(|e| format!("{e}"))
 }
 
 fn normalize_provider_api_format(raw: &str) -> Option<String> {
@@ -367,7 +419,7 @@ fn switch_provider(name: &str, ctx: &mut CommandContext) {
         Ok(new_provider) => {
             *ctx.current_model = new_provider.default_model().to_string();
             *ctx.current_provider = new_provider;
-            ctx.stats.model = ctx.current_model.clone();
+            ctx.stats.set_model(ctx.current_model);
             ctx.stats.provider = ctx.current_provider.name().to_string();
             emitln!(
                 "  {GREEN}✓ 已切到{RESET} {BOLD}{}{RESET} {DIM}· {}{RESET}",

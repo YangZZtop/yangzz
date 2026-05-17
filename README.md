@@ -24,6 +24,24 @@
 
 ---
 
+## 🆕 v0.4.0 新增
+
+- **🌐 联网工具**：`web_search`（DuckDuckGo）+ `browser`（reader 模式）—— 让 AI 实时查文档、读网页
+- **🎨 亮/暗主题自适应**：Apple Terminal 自动切亮色，可用 `YANGZZ_THEME=light\|dark` 手动指定
+- **📎 @ 引用文件 + Tab 补全**：输入 `@Cargo.toml` 自动读入文本；输入 `@src/` 按 Tab 列目录
+- **⚡ 并行只读工具**：模型一次返回多个 read/grep/glob 时批量并发执行
+- **💾 工具结果缓存 + 成本预估**：相同读操作直接命中缓存；首轮发送前显示估算费用
+- **🔁 MCP 自动重连**：连接断开时自动重启外部 MCP 服务器并重试
+- **🔐 权限/历史持久化**：always 选项按项目隔离写入；输入历史跨会话保留
+- **📊 上下文窗口实时跟踪**：状态栏进度条 + `/status` 显示 token 用量与 memory 等级
+- **🛡 流式超时保护**：120s 首 token + 60s 流中断超时，防 provider 假死
+- **🚀 长输出实时流式**：长回答逐 token 显示，不再 "等等等然后一次性 dump"
+- **🧠 模型目录扩展**：新增 Qwen / GLM / Llama 3.3+4 / Mistral / Codestral / MiMo
+
+详细变更见 [`docs/phase5-优化报告-20260517.md`](docs/phase5-优化报告-20260517.md)。
+
+---
+
 ## 🚀 快速开始
 
 > 😵 **不想看文档？** 直接跳到下面的【🤖 完全不会配？让别的 AI 帮你配】折叠块，把一段 prompt 复制给任何 AI（ChatGPT / Claude / DeepSeek / 豆包都行），它会帮你生成完整配置。跑 `yangzz --setup` 也可以走交互式向导。
@@ -511,7 +529,7 @@ CLI 参数 > YANGZZ_* 环境变量 > 项目 .yangzz.toml > 全局 config.toml
 
 > 任何 OpenAI 兼容的中转站都可以直接使用。`/model` 只会列出你显式配置过的 provider，不会把未配置的 preset 混进来。
 
-### 🛠 17 个内置工具
+### 🛠 20 个内置工具
 
 | 工具 | 功能 |
 |------|------|
@@ -526,7 +544,10 @@ CLI 参数 > YANGZZ_* 环境变量 > 项目 .yangzz.toml > 全局 config.toml
 | `glob` | 文件名模式匹配 |
 | `list_dir` | 列目录 |
 | `tree` | 目录树 |
-| `fetch` | HTTP 请求 |
+| `fetch` | HTTP 请求（原始） |
+| `web_search` | **DuckDuckGo 网页搜索**（无需 API Key，v0.4.0 新增） |
+| `browser` | **网页 reader 模式**（去除 HTML/JS/CSS 提取正文，v0.4.0 新增） |
+| `code_graph` | **代码图谱**（symbol 索引 + 引用查找，v0.4.0 新增） |
 | `notebook` | Jupyter Notebook 操作 |
 | `sub_agent` | 子代理（拆分复杂任务） |
 | `ask_user` | 向用户提问 |

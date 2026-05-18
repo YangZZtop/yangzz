@@ -413,6 +413,9 @@ mod tests {
             description: "Ship the current task".into(),
             triggers: vec!["ship it".into(), "/ship".into()],
             body: "do it".into(),
+            category: yangzz_core::skill::SkillCategory::Workflow,
+            allowed_tools: vec![],
+            user_invocable: true,
         }]);
 
         assert!(

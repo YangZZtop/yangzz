@@ -6,13 +6,74 @@ pub use matcher::match_skill;
 
 use serde::{Deserialize, Serialize};
 
-/// A Skill is a reusable prompt workflow, loaded from SKILL.md files
+/// Skill category — inferred from directory or explicit in frontmatter
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SkillCategory {
+    /// Development workflow (review, debug, explain, refactor)
+    Workflow,
+    /// Domain knowledge (security, architecture, frontend, devops)
+    Domain,
+    /// Tool/automation (verify, generate, scan)
+    Tool,
+}
+
+impl SkillCategory {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SkillCategory::Workflow => "workflow",
+            SkillCategory::Domain => "domain",
+            SkillCategory::Tool => "tool",
+        }
+    }
+
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "domain" | "knowledge" => SkillCategory::Domain,
+            "tool" | "automation" => SkillCategory::Tool,
+            _ => SkillCategory::Workflow,
+        }
+    }
+}
+
+/// A Skill is a reusable prompt workflow, loaded from SKILL.md files.
+///
+/// Frontmatter format:
+/// ```yaml
+/// ---
+/// name: review
+/// description: Code review — analyze code for bugs, style, and improvements
+/// category: workflow
+/// triggers:
+///   - review
+///   - code review
+///   - /review
+/// allowed-tools: Read, Grep, Glob
+/// user-invocable: true
+/// ---
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
     pub name: String,
     pub description: String,
     pub triggers: Vec<String>,
     pub body: String,
+    /// Category for grouping in /skills display
+    #[serde(default = "default_category")]
+    pub category: SkillCategory,
+    /// Which tools this skill is allowed to use (empty = all)
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    /// Whether users can explicitly invoke this skill (vs auto-routed by context)
+    #[serde(default = "default_true")]
+    pub user_invocable: bool,
+}
+
+fn default_category() -> SkillCategory {
+    SkillCategory::Workflow
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Built-in skills
@@ -21,7 +82,10 @@ pub fn builtin_skills() -> Vec<Skill> {
         Skill {
             name: "review".into(),
             description: "Code review — analyze code for bugs, style, and improvements".into(),
+            category: SkillCategory::Workflow,
             triggers: vec!["review".into(), "code review".into(), "/review".into()],
+            allowed_tools: vec!["Read".into(), "Grep".into(), "Glob".into()],
+            user_invocable: true,
             body: r#"You are performing a code review. Analyze the code for:
 1. **Bugs**: Logic errors, off-by-one, null/undefined access, race conditions
 2. **Style**: Naming, consistency, idiomatic patterns
@@ -35,7 +99,10 @@ Be specific. Reference line numbers. Suggest fixes."#
         Skill {
             name: "debug".into(),
             description: "Debug — systematic root cause analysis".into(),
+            category: SkillCategory::Workflow,
             triggers: vec!["debug".into(), "investigate".into(), "/debug".into()],
+            allowed_tools: vec![],
+            user_invocable: true,
             body: r#"You are debugging an issue. Follow this process:
 1. **Reproduce**: Understand the exact steps to reproduce
 2. **Isolate**: Narrow down to the specific module/function
@@ -50,12 +117,15 @@ Do NOT guess. Use file_read and grep to gather evidence first."#
         Skill {
             name: "explain".into(),
             description: "Explain — understand code or concepts in depth".into(),
+            category: SkillCategory::Workflow,
             triggers: vec![
                 "explain".into(),
                 "what does".into(),
                 "how does".into(),
                 "/explain".into(),
             ],
+            allowed_tools: vec!["Read".into(), "Grep".into()],
+            user_invocable: true,
             body: r#"Explain the code or concept clearly:
 1. **What it does** — one sentence summary
 2. **How it works** — step by step walkthrough

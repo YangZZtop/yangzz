@@ -318,80 +318,130 @@ fn run_setup_wizard() -> bool {
         }
     }
 
-    // ── Banner ──
     println!();
-    println!("  {BOLD_GOLD} █████ ████  ██████   ████████    ███████  █████████  █████████{RESET}");
-    println!("  {BOLD_GOLD} ░░███ ░███  ░░░░░███ ░░███░░███  ███░░███ ░█░░░░███  ░█░░░░███{RESET}");
-    println!("  {BOLD_GOLD}  ░███ ░███   ███████  ░███ ░███ ░███ ░███ ░   ███░   ░   ███░{RESET}");
-    println!(
-        "  {BOLD_GOLD}  ░███ ░███  ███░░███  ░███ ░███ ░███ ░███   ███░   █   ███░   █{RESET}"
-    );
-    println!(
-        "  {BOLD_GOLD}  ░░███████ ░░████████ ████ █████░░███████  █████████  █████████{RESET}"
-    );
-    println!("  {BOLD_GOLD}   ░░░░░███  ░░░░░░░░ ░░░░ ░░░░░  ░░░░░███ ░░░░░░░░░  ░░░░░░░░░{RESET}");
-    println!("  {BOLD_GOLD}   ███ ░███                       ███ ░███{RESET}");
-    println!("  {BOLD_GOLD}  ░░██████                       ░░██████{RESET}");
-    println!("  {BOLD_GOLD}   ░░░░░░                         ░░░░░░{RESET}");
-    println!();
-    println!(
-        "  {BOLD}欢迎使用 yangzz！{RESET} {DIM}下面 5 步给这份配置起名、选协议、填入口、填 Key、选模型。{RESET}"
-    );
+    println!("  {BOLD_GOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}");
+    println!("  {BOLD}  欢迎使用 yangzz！{RESET}");
+    println!("  {DIM}  终端 AI 编程助手 — 3 步配置，马上能用{RESET}");
+    println!("  {BOLD_GOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{RESET}");
     println!();
 
-    // ── 1. 给配置起名 ──
-    // provider 就是一个 profile 名，不是厂商。
-    let name = prompt_default("给这份配置起个名字", "my-relay");
-    if name.is_empty() {
+    // ── Step 0: 场景选择 ──
+    println!("  {BOLD}你的 AI 接口来自哪里？{RESET}");
+    println!();
+    println!("    {GOLD}1{RESET}  中转站（最常见：从中转商买的地址+Key）");
+    println!("    {GOLD}2{RESET}  本地 Ollama（免费离线，不需要 Key）");
+    println!("    {GOLD}3{RESET}  官方 API（直连 OpenAI / Anthropic / Google）");
+    println!();
+    let choice = prompt_default("选一个", "1");
+
+    match choice.as_str() {
+        "2" => return setup_ollama(),
+        "3" => return setup_official(),
+        _ => {} // 继续中转站流程
+    }
+
+    // ── 中转站流程（最常见） ──
+    println!();
+    println!("  {BOLD}好的，配置你的中转站：{RESET}");
+    println!("  {DIM}（从中转商那里拿到的地址和 Key 填进来就行）{RESET}");
+    println!();
+
+    // Step 1: 地址
+    let url = prompt("  {BOLD}中转地址: {RESET}");
+    if url.is_empty() {
+        println!("  {RED}✖{RESET} 地址不能为空");
         return false;
     }
 
-    // ── 2. api_format：入口协议 ──
-    let api_format = prompt_default(
-        "接口协议（openai / anthropic / gemini / vertex / bedrock）",
-        "openai",
-    );
-    let Some(api_format) = normalize_setup_api_format(&api_format) else {
-        println!(
-            "  {RED}✖{RESET} 不支持的协议：{api_format}（可选：openai / anthropic / gemini / vertex / bedrock）"
-        );
-        return false;
+    // Step 2: Key
+    let key = prompt("  {BOLD}API Key: {RESET}");
+
+    // Step 3: 自动获取模型，让用户选
+    println!();
+    print!("  {DIM}正在获取可用模型…{RESET}");
+    let _ = io::stdout().flush();
+
+    let api_format = infer_api_format_from_url(&url, "");
+    let name = infer_provider_name(&url);
+
+    // Try to fetch models from the provider
+    let fetched_models = std::thread::spawn({
+        let url = url.clone();
+        let key = key.clone();
+        let api_format = api_format.clone();
+        move || {
+            let rt = tokio::runtime::Runtime::new().ok()?;
+            rt.block_on(async {
+                let tmp_settings = yangzz_core::config::Settings {
+                    provider: Some("setup".into()),
+                    api_key: Some(key),
+                    base_url: Some(url),
+                    api_format: Some(api_format),
+                    providers: vec![],
+                    ..Default::default()
+                };
+                let provider = yangzz_core::config::resolve_provider(&tmp_settings).ok()?;
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    provider.list_models(),
+                )
+                .await
+                .ok()?
+                .ok()
+            })
+        }
+    })
+    .join()
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+
+    print!("\r\x1b[2K"); // Clear "正在获取…"
+    let _ = io::stdout().flush();
+
+    let model = if !fetched_models.is_empty() {
+        println!("  {GREEN}✓{RESET} 找到 {BOLD}{}{RESET} 个可用模型：", fetched_models.len());
+        println!();
+        for (i, m) in fetched_models.iter().enumerate().take(15) {
+            println!("    {GOLD}{:>2}{RESET}  {m}", i + 1);
+        }
+        if fetched_models.len() > 15 {
+            println!("    {DIM}… 还有 {} 个{RESET}", fetched_models.len() - 15);
+        }
+        println!();
+        let choice = prompt_default("选一个（输入序号或模型名）", "1");
+        // Parse as number or use as model name directly
+        if let Ok(idx) = choice.parse::<usize>() {
+            if idx >= 1 && idx <= fetched_models.len() {
+                fetched_models[idx - 1].clone()
+            } else {
+                choice
+            }
+        } else {
+            choice
+        }
+    } else {
+        println!("  {DIM}(未能获取模型列表，请手动输入){RESET}");
+        println!("  {DIM}常用：claude-sonnet-4-20250514 / gpt-4o / deepseek-chat{RESET}");
+        prompt_default("默认模型", "claude-sonnet-4-20250514")
     };
 
-    // ── 3. 入口地址 ──
-    // 允许带 path（例如 https://relay.example.com/antigravity）
-    // Vertex / Bedrock 走云厂商环境变量时，这里可留空。
-    let url = prompt_default("入口地址（含路径；Vertex / Bedrock 可留空）", "");
-    if url.is_empty() && !matches!(api_format.as_str(), "vertex" | "bedrock") {
-        println!("  {RED}✖{RESET} 入口地址不能为空（Vertex / Bedrock 可留空）");
-        return false;
-    }
+    // ── 自动推断 api_format ──
+    let api_format = infer_api_format_from_url(&url, &model);
 
-    // ── 4. API Key ──
-    let key = prompt(&format!("{BOLD}API Key（可留空）: {RESET}"));
+    // ── 自动生成配置名 ──
+    let name = infer_provider_name(&url);
 
-    // ── 5. 默认模型 ──
-    let model = prompt_default(
-        "默认模型 (要跟入口实际支持的模型名一致)",
-        "claude-sonnet-4-20250514",
-    );
-
-    // ── Write config — unified ~/.yangzz/config.toml ──
+    // ── Write config ──
     yangzz_core::paths::ensure_yangzz_dir();
-    let dir = yangzz_core::paths::yangzz_dir();
     let config_path = yangzz_core::paths::config_path();
 
     if config_path.exists() {
-        let overwrite = prompt_default(&format!("{YELLOW}⚠{RESET} 配置已存在，覆盖？(y/n)"), "n");
+        let overwrite = prompt_default(&format!("  {YELLOW}⚠{RESET} 配置已存在，覆盖？(y/n)"), "n");
         if !overwrite.to_lowercase().starts_with('y') {
             println!("  已取消。");
             return false;
         }
-    }
-
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        println!("  {RED}✖{RESET} 创建目录失败: {e}");
-        return false;
     }
 
     let toml = format!(
@@ -413,28 +463,169 @@ api_format = "{api_format}"
     }
 
     println!();
-    println!(
-        "  {GREEN}✓{RESET} 配置已保存 {DIM}{}{RESET}",
-        config_path.display()
-    );
+    println!("  {GREEN}✓ 配置完成！{RESET}");
+    println!("  {DIM}文件: {}{RESET}", config_path.display());
     println!();
-    println!("  {BOLD}下面几个命令马上就能用：{RESET}");
-    println!("    {GOLD}输入你的问题{RESET}       {DIM}直接打字，回车发送{RESET}");
-    println!("    {GOLD}/help{RESET}             {DIM}查看所有命令{RESET}");
-    println!("    {GOLD}/provider add{RESET}     {DIM}再加一个中转{RESET}");
-    println!("    {GOLD}/model{RESET}            {DIM}切换模型{RESET}");
-    println!("    {GOLD}/quit{RESET}             {DIM}退出{RESET}");
-    if matches!(api_format.as_str(), "vertex" | "bedrock") {
-        println!();
-        println!("  {DIM}提示：该协议依赖云厂商环境变量鉴权。{RESET}");
-        println!("  {DIM}Vertex 需要 GOOGLE_CLOUD_PROJECT + GOOGLE_ACCESS_TOKEN{RESET}");
-        println!(
-            "  {DIM}Bedrock 需要 AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY (+ AWS_REGION){RESET}"
-        );
-    }
+    println!("  {BOLD}现在可以：{RESET}");
+    println!("    • 直接打字提问，回车发送");
+    println!("    • {GOLD}/model{RESET}    切换模型");
+    println!("    • {GOLD}/thinking{RESET} 调整思考深度");
+    println!("    • {GOLD}/help{RESET}     查看所有命令");
+    println!("    • {GOLD}Ctrl+C{RESET}    取消 / {GOLD}Ctrl+D{RESET} 退出");
     println!();
 
     true
+}
+
+/// Ollama 本地配置（零门槛）
+fn setup_ollama() -> bool {
+    use std::io::{self, Write};
+
+    println!();
+    println!("  {BOLD}Ollama 本地模式{RESET}");
+    println!("  {DIM}确保 Ollama 已启动（ollama serve）{RESET}");
+    println!();
+
+    print!("  模型名 {DIM}[llama3]{RESET}: ");
+    io::stdout().flush().unwrap();
+    let mut model = String::new();
+    let _ = io::stdin().read_line(&mut model);
+    let model = model.trim();
+    let model = if model.is_empty() { "llama3" } else { model };
+
+    yangzz_core::paths::ensure_yangzz_dir();
+    let config_path = yangzz_core::paths::config_path();
+    let toml = format!(
+        r#"provider = "ollama"
+model = "{model}"
+
+[[providers]]
+name = "ollama"
+api_key = ""
+base_url = "http://localhost:11434"
+default_model = "{model}"
+api_format = "openai"
+"#
+    );
+
+    if let Err(e) = std::fs::write(&config_path, &toml) {
+        println!("  {RED}✖{RESET} 写入失败: {e}");
+        return false;
+    }
+
+    println!();
+    println!("  {GREEN}✓ 配置完成！{RESET} 使用 Ollama 本地模型 {BOLD}{model}{RESET}");
+    println!();
+    true
+}
+
+/// 官方 API 直连配置
+fn setup_official() -> bool {
+    use std::io::{self, Write};
+
+    println!();
+    println!("  {BOLD}选择官方 API：{RESET}");
+    println!("    {GOLD}1{RESET}  OpenAI（GPT-4o / GPT-5 / o3）");
+    println!("    {GOLD}2{RESET}  Anthropic（Claude Sonnet / Opus）");
+    println!("    {GOLD}3{RESET}  Google Gemini");
+    println!();
+
+    print!("  选择 {DIM}[1]{RESET}: ");
+    io::stdout().flush().unwrap();
+    let mut choice = String::new();
+    let _ = io::stdin().read_line(&mut choice);
+    let choice = choice.trim();
+
+    let (name, base_url, api_format, default_model, key_hint) = match choice {
+        "2" => ("anthropic", "https://api.anthropic.com", "anthropic", "claude-sonnet-4-20250514", "sk-ant-..."),
+        "3" => ("gemini", "https://generativelanguage.googleapis.com", "gemini", "gemini-2.5-pro", "AIza..."),
+        _ => ("openai", "https://api.openai.com", "openai", "gpt-4o", "sk-..."),
+    };
+
+    println!();
+    print!("  API Key ({DIM}{key_hint}{RESET}): ");
+    io::stdout().flush().unwrap();
+    let mut key = String::new();
+    let _ = io::stdin().read_line(&mut key);
+    let key = key.trim();
+
+    if key.is_empty() {
+        println!("  {RED}✖{RESET} 官方 API 需要 Key");
+        return false;
+    }
+
+    yangzz_core::paths::ensure_yangzz_dir();
+    let config_path = yangzz_core::paths::config_path();
+    let toml = format!(
+        r#"provider = "{name}"
+model = "{default_model}"
+
+[[providers]]
+name = "{name}"
+api_key = "{key}"
+base_url = "{base_url}"
+default_model = "{default_model}"
+api_format = "{api_format}"
+"#
+    );
+
+    if let Err(e) = std::fs::write(&config_path, &toml) {
+        println!("  {RED}✖{RESET} 写入失败: {e}");
+        return false;
+    }
+
+    println!();
+    println!("  {GREEN}✓ 配置完成！{RESET} 使用 {BOLD}{name}{RESET} · {default_model}");
+    println!();
+    true
+}
+
+/// 从 URL 推断 api_format
+fn infer_api_format_from_url(url: &str, model: &str) -> String {
+    let lower_url = url.to_lowercase();
+    let lower_model = model.to_lowercase();
+
+    // 官方域名直接判断
+    if lower_url.contains("anthropic.com") {
+        return "anthropic".to_string();
+    }
+    if lower_url.contains("generativelanguage.googleapis.com") {
+        return "gemini".to_string();
+    }
+
+    // 如果模型名是 Claude 且 URL 不是已知的 OpenAI 兼容中转，可能是 Anthropic 格式
+    // 但绝大多数中转都是 OpenAI 格式，即使调 Claude 也是
+    // 所以默认 openai，除非 URL 明确是 Anthropic
+    if lower_url.contains("anyrouter") || lower_url.contains("packycode") {
+        return "anthropic".to_string();
+    }
+
+    // 默认 OpenAI 兼容（覆盖 99% 的中转站）
+    "openai".to_string()
+}
+
+/// 从 URL 生成一个简短的 provider 名
+fn infer_provider_name(url: &str) -> String {
+    // 尝试提取域名中有意义的部分
+    let cleaned = url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://")
+        .split('/')
+        .next()
+        .unwrap_or("my-relay");
+
+    // 如果是 IP 地址，用 "my-relay"
+    if cleaned.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true) {
+        return "my-relay".to_string();
+    }
+
+    // 取域名第一段
+    let name = cleaned.split('.').next().unwrap_or("my-relay");
+    if name.len() > 20 {
+        "my-relay".to_string()
+    } else {
+        name.to_string()
+    }
 }
 
 // ── Health Check (yangzz --doctor) ──

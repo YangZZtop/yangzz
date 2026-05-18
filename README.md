@@ -24,19 +24,22 @@
 
 ---
 
-## 🆕 v0.4.0 新增
+## 🆕 v0.5.2 新增
 
-- **🌐 联网工具**：`web_search`（DuckDuckGo）+ `browser`（reader 模式）—— 让 AI 实时查文档、读网页
-- **🎨 亮/暗主题自适应**：Apple Terminal 自动切亮色，可用 `YANGZZ_THEME=light\|dark` 手动指定
-- **📎 @ 引用文件 + Tab 补全**：输入 `@Cargo.toml` 自动读入文本；输入 `@src/` 按 Tab 列目录
-- **⚡ 并行只读工具**：模型一次返回多个 read/grep/glob 时批量并发执行
-- **💾 工具结果缓存 + 成本预估**：相同读操作直接命中缓存；首轮发送前显示估算费用
-- **🔁 MCP 自动重连**：连接断开时自动重启外部 MCP 服务器并重试
-- **🔐 权限/历史持久化**：always 选项按项目隔离写入；输入历史跨会话保留
-- **📊 上下文窗口实时跟踪**：状态栏进度条 + `/status` 显示 token 用量与 memory 等级
+- **🧠 `/thinking` 命令**：运行时控制思考深度（off / low / medium / high / max / 自定义 token 数）
+- **📋 `/provider models`**：实时从 API 获取 provider 的全部可用模型 + 能力标签
+- **🚀 首次配置零门槛**：只需填地址 + Key，自动获取模型列表让你选一个
+- **🌐 联网工具**：`web_search`（DuckDuckGo）+ `browser`（reader 模式）
+- **🎨 亮/暗主题自适应**：Apple Terminal 自动切亮色，`YANGZZ_THEME=light|dark` 手动指定
+- **📎 @文件引用 + Tab 补全**：`@Cargo.toml` 读入文本，`@src/` 按 Tab 列目录
+- **⚡ 并行只读工具**：多个 read/grep/glob 批量执行
+- **💾 工具结果缓存 + 成本预估**：相同读操作命中缓存；首轮显示估算费用
+- **🔁 MCP 自动重连**：连接断开时自动重启 + 重试
+- **🔐 权限/历史持久化**：always 选项按项目隔离；输入历史跨会话保留
+- **📊 上下文窗口实时跟踪**：状态栏进度条 `████░░░░ 45%` + `/status` 详细信息
 - **🛡 流式超时保护**：120s 首 token + 60s 流中断超时，防 provider 假死
-- **🚀 长输出实时流式**：长回答逐 token 显示，不再 "等等等然后一次性 dump"
-- **🧠 模型目录扩展**：新增 Qwen / GLM / Llama 3.3+4 / Mistral / Codestral / MiMo
+- **🚀 长输出实时流式**：长回答逐 token 显示，不再等完才渲染
+- **🧠 模型目录扩展**：Claude 4.6/4.7 (1M ctx) + Qwen + GLM + Llama 4 + Mistral + MiMo
 
 详细变更见 [`docs/phase5-优化报告-20260517.md`](docs/phase5-优化报告-20260517.md)。
 
@@ -44,7 +47,7 @@
 
 ## 🚀 快速开始
 
-> 😵 **不想看文档？** 直接跳到下面的【🤖 完全不会配？让别的 AI 帮你配】折叠块，把一段 prompt 复制给任何 AI（ChatGPT / Claude / DeepSeek / 豆包都行），它会帮你生成完整配置。跑 `yangzz --setup` 也可以走交互式向导。
+> 😵 **不想看文档？** 直接运行 `yangzz`，首次启动会自动进入配置向导——只需填**中转地址 + Key**，yangzz 自动获取可用模型让你选一个。3 步搞定，马上能用。
 
 ### 最小配置示例（中转）
 
@@ -552,6 +555,8 @@ CLI 参数 > YANGZZ_* 环境变量 > 项目 .yangzz.toml > 全局 config.toml
 | `sub_agent` | 子代理（拆分复杂任务） |
 | `ask_user` | 向用户提问 |
 | `todo` | 任务管理（持久化） |
+| `web_search` | 搜索互联网（DuckDuckGo，无需 API Key） |
+| `browser` | 打开网页提取正文（reader mode） |
 
 ### 🧠 Hermes 自进化记忆
 
@@ -660,10 +665,12 @@ v0.3.1 起斜杠命令采用**名词优先 + 子命令**的统一语法。`/help
 | `/provider rename <old> <new>` | 重命名 provider |
 | `/provider remove <name>` | 删除 provider |
 | `/provider <name>` | 切换到指定 provider |
+| `/provider models [name]` | 查看 provider 的全部可用模型（从 API 实时获取） |
 | `/key list` | 列出所有 provider 的 API key 状态（不显示明文） |
 | `/key set <provider>` | 更新某 provider 的 API key |
 | `/config` | 查看当前生效的配置 |
 | `/config path` | 打印配置文件路径 |
+| `/thinking [level]` | 设置思考深度（off/low/medium/high/max/数字） |
 
 ### 对话类
 
@@ -727,7 +734,7 @@ yangzz/
 │   ├── yangzz-core/           # 核心库
 │   │   ├── config/            # 配置加载 + Provider 解析 + 模型适配器
 │   │   ├── provider/          # 9 个 Provider 实现 + 智能路由
-│   │   ├── tool/              # 17 个内置工具
+│   │   ├── tool/              # 20 个内置工具
 │   │   ├── query/             # Agentic Loop（记忆降级 + 挫败检测 + JSON 修复）
 │   │   ├── memory.rs          # 4 层记忆 + Hermes 自进化
 │   │   ├── sandbox.rs         # 沙箱 + 执行策略
@@ -775,7 +782,8 @@ yangzz/
 | 任务队列 | ✅ | ❌ | ❌ |
 | 智能路由 | ✅ | ❌ | ❌ |
 | 配置迁移 | ✅ | — | — |
-| 思考深度控制 | ✅ | ❌ | ❌ |
+| 思考深度控制 | ✅ `/thinking` | ❌ | ❌ |
+| 联网搜索 | ✅ web_search + browser | ❌ | ❌ |
 | 中文原生 | ✅ 双语 | ❌ | ❌ |
 
 详细对比见 [COMPARISON.md](../docs/COMPARISON.md)

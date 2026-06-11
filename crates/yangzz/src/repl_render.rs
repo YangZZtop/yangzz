@@ -2,7 +2,31 @@ use std::io::{self, Write};
 use std::time::Instant;
 
 use crate::ui::format::*;
+use unicode_width::UnicodeWidthChar;
 use yangzz_core::render::Renderer;
+
+/// Detect terminals where the cursor-movement / line-erase reflow is unsafe.
+///
+/// On such terminals (and when output is piped) we stream text straight through
+/// and never emit `\x1b[A` / `\x1b[2K`, which is what caused the Windows
+/// "UI 乱跑" corruption when the line-count estimate was off by one.
+///
+/// Forced on/off via `YANGZZ_TUI_PLAIN`; otherwise auto-enabled for `TERM=dumb`
+/// and non-TTY stdout.
+pub(crate) fn plain_mode() -> bool {
+    use std::io::IsTerminal;
+    if let Ok(v) = std::env::var("YANGZZ_TUI_PLAIN") {
+        match v.trim().to_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => return true,
+            "0" | "false" | "no" | "off" => return false,
+            _ => {}
+        }
+    }
+    if std::env::var("TERM").map(|t| t == "dumb").unwrap_or(false) {
+        return true;
+    }
+    !std::io::stdout().is_terminal()
+}
 
 pub(crate) struct ReplRenderer {
     streaming_text: String,
@@ -12,6 +36,7 @@ pub(crate) struct ReplRenderer {
     line_count: usize,
     tool_start_time: Option<Instant>,
     current_tool: Option<String>,
+    plain: bool,
 }
 
 impl ReplRenderer {
@@ -24,6 +49,7 @@ impl ReplRenderer {
             line_count: 0,
             tool_start_time: None,
             current_tool: None,
+            plain: plain_mode(),
         }
     }
 
@@ -63,22 +89,15 @@ impl ReplRenderer {
             .unwrap_or(80);
         text.split('\n')
             .map(|l| {
+                // Accurate display width via the Unicode East-Asian-width tables
+                // (handles CJK, full-width forms, combining marks, control chars)
+                // instead of the previous hand-rolled range check, which missed
+                // many wide ranges and mis-counted wrapped rows on Windows.
                 let display_width: usize = l
                     .chars()
-                    .map(|c| {
-                        if ('\u{2E80}'..='\u{9FFF}').contains(&c)
-                            || ('\u{F900}'..='\u{FAFF}').contains(&c)
-                            || ('\u{FE30}'..='\u{FE4F}').contains(&c)
-                            || ('\u{FF01}'..='\u{FF60}').contains(&c)
-                            || ('\u{20000}'..='\u{2FA1F}').contains(&c)
-                        {
-                            2
-                        } else {
-                            1
-                        }
-                    })
+                    .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
                     .sum();
-                std::cmp::max(1, (display_width + tw - 1) / tw)
+                std::cmp::max(1, display_width.div_ceil(tw))
             })
             .sum()
     }
@@ -101,9 +120,11 @@ impl ReplRenderer {
         let counter_mode = self.streaming_lines > max_erase;
         let has_md = Self::has_markdown(&text);
 
-        if counter_mode {
-            // Long output was streamed directly — just ensure it ends with newline.
-            // Don't try to erase and reformat (it's already scrolled past).
+        if counter_mode || self.plain {
+            // Long output was streamed directly, or we're on a plain/unsafe
+            // terminal — just ensure it ends with a newline. Never erase and
+            // reformat: that relies on cursor-up moves whose row count can be
+            // off by one and corrupt the screen (the Windows "UI 乱跑" bug).
             if !raw.ends_with('\n') {
                 println!();
             }
@@ -493,5 +514,43 @@ fn error_hint(message: &str) -> Option<&'static str> {
         None
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // No TTY in the test harness, so `terminal::size()` errors out and
+    // `count_display_lines` falls back to a width of 80 — deterministic.
+    #[test]
+    fn count_display_lines_counts_wide_chars_as_two() {
+        // 40 CJK chars = 80 display cols = exactly one 80-col row.
+        let cjk = "中".repeat(40);
+        assert_eq!(ReplRenderer::count_display_lines(&cjk), 1);
+        // 41 CJK chars = 82 cols → wraps to 2 rows.
+        let cjk = "中".repeat(41);
+        assert_eq!(ReplRenderer::count_display_lines(&cjk), 2);
+    }
+
+    #[test]
+    fn count_display_lines_handles_ascii_and_newlines() {
+        assert_eq!(ReplRenderer::count_display_lines("hello"), 1);
+        assert_eq!(ReplRenderer::count_display_lines(&"a".repeat(80)), 1);
+        assert_eq!(ReplRenderer::count_display_lines(&"a".repeat(81)), 2);
+        // Each non-empty line counts at least one row; blank lines also count 1.
+        assert_eq!(ReplRenderer::count_display_lines("a\nb\nc"), 3);
+        assert_eq!(ReplRenderer::count_display_lines(""), 0);
+    }
+
+    #[test]
+    fn plain_mode_env_override() {
+        // SAFETY: single-threaded access to this process-global var within the
+        // test; no other test reads or writes YANGZZ_TUI_PLAIN.
+        unsafe { std::env::set_var("YANGZZ_TUI_PLAIN", "1") };
+        assert!(plain_mode());
+        unsafe { std::env::set_var("YANGZZ_TUI_PLAIN", "0") };
+        assert!(!plain_mode());
+        unsafe { std::env::remove_var("YANGZZ_TUI_PLAIN") };
     }
 }

@@ -100,13 +100,16 @@ async fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    // Windows: enable ANSI escape codes in cmd.exe / PowerShell
+    // Windows: explicitly enable virtual-terminal (ANSI/VT) processing on the
+    // stdout console so the escape sequences we print (colors, cursor moves,
+    // line clears) are interpreted rather than dumped as literal `←[2K` text.
+    // The previous approach (toggling raw mode) only enabled VT as a side
+    // effect and was unreliable on older conhost/cmd, causing the "UI 乱跑"
+    // corruption. `enable_ansi_support` is a no-op on non-Windows platforms.
+    let _ = enable_ansi_support::enable_ansi_support();
     #[cfg(target_os = "windows")]
     {
         let _ = crossterm::execute!(std::io::stdout(), crossterm::terminal::SetTitle("yangzz"));
-        // Enable virtual terminal processing for ANSI color support
-        let _ = crossterm::terminal::enable_raw_mode();
-        let _ = crossterm::terminal::disable_raw_mode();
     }
 
     // Silently migrate legacy data (pre-v0.3.0) on every startup.
@@ -280,6 +283,7 @@ async fn build_tool_registry(cwd: &std::path::Path) -> ToolRegistry {
 //   - model     = 希望上游路由到的模型名
 // 只问必要问题，其他给合理默认。
 
+#[allow(dead_code)] // retained for the setup-wizard test suite / future use
 fn normalize_setup_api_format(raw: &str) -> Option<String> {
     let normalized = raw.trim().to_lowercase();
     match normalized.as_str() {
@@ -362,7 +366,6 @@ fn run_setup_wizard() -> bool {
     let _ = io::stdout().flush();
 
     let api_format = infer_api_format_from_url(&url, "");
-    let name = infer_provider_name(&url);
 
     // Try to fetch models from the provider
     let fetched_models = std::thread::spawn({
@@ -581,9 +584,8 @@ api_format = "{api_format}"
 }
 
 /// 从 URL 推断 api_format
-fn infer_api_format_from_url(url: &str, model: &str) -> String {
+fn infer_api_format_from_url(url: &str, _model: &str) -> String {
     let lower_url = url.to_lowercase();
-    let lower_model = model.to_lowercase();
 
     // 官方域名直接判断
     if lower_url.contains("anthropic.com") {

@@ -41,8 +41,6 @@
 - **🚀 长输出实时流式**：长回答逐 token 显示，不再等完才渲染
 - **🧠 模型目录扩展**：Claude 4.6/4.7 (1M ctx) + Qwen + GLM + Llama 4 + Mistral + MiMo
 
-详细变更见 [`docs/phase5-优化报告-20260517.md`](docs/phase5-优化报告-20260517.md)。
-
 ---
 
 ## 🚀 快速开始
@@ -785,8 +783,6 @@ yangzz/
 | 思考深度控制 | ✅ `/thinking` | ❌ | ❌ |
 | 联网搜索 | ✅ web_search + browser | ❌ | ❌ |
 | 中文原生 | ✅ 双语 | ❌ | ❌ |
-
-详细对比见 [COMPARISON.md](../docs/COMPARISON.md)
 
 ---
 

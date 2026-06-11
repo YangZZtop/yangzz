@@ -81,12 +81,19 @@ impl ReplRenderer {
     }
 
     fn count_display_lines(text: &str) -> usize {
-        if text.is_empty() {
-            return 0;
-        }
         let tw = crossterm::terminal::size()
             .map(|(w, _)| w as usize)
             .unwrap_or(80);
+        Self::count_display_lines_at_width(text, tw)
+    }
+
+    /// Number of terminal rows `text` occupies when wrapped at `term_width`.
+    /// Split out so it can be tested independently of the runtime terminal size.
+    fn count_display_lines_at_width(text: &str, term_width: usize) -> usize {
+        if text.is_empty() {
+            return 0;
+        }
+        let tw = term_width.max(1);
         text.split('\n')
             .map(|l| {
                 // Accurate display width via the Unicode East-Asian-width tables
@@ -521,26 +528,26 @@ fn error_hint(message: &str) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    // No TTY in the test harness, so `terminal::size()` errors out and
-    // `count_display_lines` falls back to a width of 80 — deterministic.
+    // Test against an explicit width so results don't depend on the CI runner's
+    // actual console size (Windows runners report a real, non-80 width).
     #[test]
     fn count_display_lines_counts_wide_chars_as_two() {
         // 40 CJK chars = 80 display cols = exactly one 80-col row.
         let cjk = "中".repeat(40);
-        assert_eq!(ReplRenderer::count_display_lines(&cjk), 1);
+        assert_eq!(ReplRenderer::count_display_lines_at_width(&cjk, 80), 1);
         // 41 CJK chars = 82 cols → wraps to 2 rows.
         let cjk = "中".repeat(41);
-        assert_eq!(ReplRenderer::count_display_lines(&cjk), 2);
+        assert_eq!(ReplRenderer::count_display_lines_at_width(&cjk, 80), 2);
     }
 
     #[test]
     fn count_display_lines_handles_ascii_and_newlines() {
-        assert_eq!(ReplRenderer::count_display_lines("hello"), 1);
-        assert_eq!(ReplRenderer::count_display_lines(&"a".repeat(80)), 1);
-        assert_eq!(ReplRenderer::count_display_lines(&"a".repeat(81)), 2);
+        assert_eq!(ReplRenderer::count_display_lines_at_width("hello", 80), 1);
+        assert_eq!(ReplRenderer::count_display_lines_at_width(&"a".repeat(80), 80), 1);
+        assert_eq!(ReplRenderer::count_display_lines_at_width(&"a".repeat(81), 80), 2);
         // Each non-empty line counts at least one row; blank lines also count 1.
-        assert_eq!(ReplRenderer::count_display_lines("a\nb\nc"), 3);
-        assert_eq!(ReplRenderer::count_display_lines(""), 0);
+        assert_eq!(ReplRenderer::count_display_lines_at_width("a\nb\nc", 80), 3);
+        assert_eq!(ReplRenderer::count_display_lines_at_width("", 80), 0);
     }
 
     #[test]

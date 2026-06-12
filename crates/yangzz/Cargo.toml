@@ -31,3 +31,4 @@ chrono = { workspace = true }
 rustyline = { workspace = true }
 ratatui = { workspace = true, features = ["unstable-rendered-line-info"], optional = true }
 unicode-width = "0.2"
+enable-ansi-support = "0.2"
